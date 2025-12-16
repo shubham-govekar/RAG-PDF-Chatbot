@@ -1,0 +1,16 @@
+# Ignore Virtual Environment (CRITICAL)
+venv/
+env/
+.env
+
+# Ignore Python Cache (Junk files)
+__pycache__/
+*.py[cod]
+
+# Ignore Local Database
+chroma_db/
+*.chroma
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
