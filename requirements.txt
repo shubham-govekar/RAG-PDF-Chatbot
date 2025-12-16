@@ -1,0 +1,13 @@
+streamlit
+chromadb
+langchain
+langchain-community
+langchain-chroma
+fastembed
+flashrank
+rank_bm25
+ollama
+pypdf
+tiktoken
+sentence-transformers
+numpy
