@@ -11,6 +11,21 @@ Standard RAG implementations often suffer from retrieval inaccuracies (missing s
 3.  **Relevance Gating:** Implements a hard rejection threshold based on Cross-Encoder scores. If the system detects low relevance between the query and the documents, it refuses to answer rather than fabricating a response.
 4.  **Local Execution:** Fully privacy-focused architecture running locally using Ollama and ephemeral vector stores.
 
+## Technical Architecture
+
+The system follows a modular pipeline architecture:
+
+```mermaid
+graph LR
+    A[User Query] --> B{Intent Classifier}
+    B -- Search --> C[Hybrid Retriever]
+    C --> D[Vector Search] & E[BM25 Keyword Search]
+    D & E --> F[Merged Results]
+    F --> G[Cross-Encoder Re-ranker]
+    G --> H{Relevance Gate}
+    H -- Score < Threshold --> I[Reject Query]
+    H -- Score >= Threshold --> J[Llama 3.2 Context]
+
 ## Key Features
 
 * **Hybrid Search Strategy:** Utilizes a weighted ensemble of Cosine Similarity (Dense) and BM25 (Sparse) to handle various query types effectively.
