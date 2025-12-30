@@ -255,52 +255,50 @@ if st.session_state.processed:
     question = st.chat_input("Ask about your documents...")
     
     if question:
-        # User Message
-        st.session_state.chat_history.append({"role": "user", "content": question})
-        with st.chat_message("user"):
-            st.markdown(question)
-        
-        # Assistant Response
-        # Assistant Response
-        with st.chat_message("assistant"):
-            try:
-                # --- 1. ANIMATED AGENT WORKFLOW ---
-                with st.status("🧠 Agent Reasoning...", expanded=True) as status:
-                    
-                    # Step A: Reformulation & Routing
-                    st.write("🔍 Analyzing query intent...")
-                    reformulated = reformulate_query(question, st.session_state.conversation_context)
-                    intent = generation_service.detect_intent(reformulated)
-                    st.write(f"👉 Detected Intent: **{intent}**")
-                    
-                    # Step B: Retrieval
-                    st.write(f"📚 Searching documents using {intent} strategy...")
-                    query_emb = embedding_service.embed_query(reformulated)
-                    filter_pdfs = st.session_state.get('selected_pdfs', None)
-                    
-                    results = retrieval_service.retrieve(
-                        intent=intent,
-                        collection=st.session_state.collection,
-                        query_text=reformulated,
-                        query_emb=query_emb,
-                        filter_pdfs=filter_pdfs
-                    )
-                    
-                    # --- Step C: Re-ranking & The "Hard Gate" ---
+            # User Message
+            st.session_state.chat_history.append({"role": "user", "content": question})
+            with st.chat_message("user"):
+                st.markdown(question)
+            
+            # Assistant Response
+            with st.chat_message("assistant"):
+                try:
+                    # --- 1. ANIMATED AGENT WORKFLOW ---
+                    with st.status("🧠 Agent Reasoning...", expanded=True) as status:
+                        
+                        # Step A: Reformulation & Routing
+                        st.write("🔍 Analyzing query intent...")
+                        reformulated = reformulate_query(question, st.session_state.conversation_context)
+                        intent = generation_service.detect_intent(reformulated)
+                        st.write(f"👉 Detected Intent: **{intent}**")
+                        
+                        # Step B: Retrieval
+                        st.write(f"📚 Searching documents using {intent} strategy...")
+                        query_emb = embedding_service.embed_query(reformulated)
+                        filter_pdfs = st.session_state.get('selected_pdfs', None)
+                        
+                        results = retrieval_service.retrieve(
+                            intent=intent,
+                            collection=st.session_state.collection,
+                            query_text=reformulated,
+                            query_emb=query_emb,
+                            filter_pdfs=filter_pdfs
+                        )
+                        
+                       # --- Step C: Re-ranking & The "Hard Gate" ---
+                    # We only run the expensive re-ranker for specific "SEARCH" queries
                     if intent == "SEARCH":
                         st.write("✨ Re-ranking results with Cross-Encoder...")
                     
                     # 1. Get the Top Result
                     top_chunk = results['scores'][0] if results['scores'] else None
                     
-                    # 2. THE HARD GATE (Crucial Fix)
-                    # We look ONLY at 'rerank_score' (The Smart Score).
-                    # FlashRank is harsh. A score < 0.2 is almost certainly garbage.
-                    # We default to 1.0 if rerank_score is missing (e.g., if intent != SEARCH)
-                    raw_score = top_chunk.get('rerank_score', 0.0) if top_chunk else 0
+                    # 2. THE HARD GATE (FIXED)
+                    # FIX: If 'rerank_score' is missing (because intent was SUMMARY or METADATA), 
+                    # we default to 1.0 (Assume relevance) so we don't block valid answers.
+                    raw_score = top_chunk.get('rerank_score', 1.0) if top_chunk else 0
                     
-                    # Strict threshold: If the smart model says it's < 20% relevant, kill it.
-                    # This works for Sudan, India, France, Mars, etc.
+                    # Strict threshold: Only kill it if we HAVE a score and it's low.
                     is_relevant = top_chunk and raw_score >= 0.2
                     
                     # Update UI based on this robust check
@@ -309,56 +307,62 @@ if st.session_state.processed:
                     else:
                         status.update(label="❌ Query unrelated to Document", state="error", expanded=False)
 
-                # --- 2. DETAILED TRACE ---
-                with st.expander("🧠 View Detailed Logic", expanded=False):
-                    col1, col2 = st.columns([1, 2])
-                    with col1:
-                        st.metric("Intent", intent)
-                        st.metric("Chunks Found", len(results['scores']))
-                        # Show the raw score that made the decision
+                    # --- 2. DETAILED TRACE (FIXED) ---
+                    with st.expander("🧠 View Detailed Logic", expanded=False):
+                        col1, col2 = st.columns([1, 2])
+                        with col1:
+                            st.metric("Intent", intent)
+                            st.metric("Chunks Found", len(results['scores']))
+                            # Show the raw score that made the decision
+                            if top_chunk:
+                                st.metric("Relevance Score", f"{raw_score:.4f}")
+                        
+                        with col2:
+                            st.caption("📝 **Reformulated Query:**")
+                            st.code(reformulated, language="text")
+                            if top_chunk:
+                                st.caption("📑 **Top Match Preview:**")
+                                st.info(top_chunk.get('text', '')[:200] + "...")
+
+                    # --- 3. GENERATION ---
+                    if not is_relevant:
+                        # ROBUST FAILURE MESSAGE
+                        st.warning("⚠️ The AI determined this question is unrelated to the uploaded PDF.")
+                        
+                        # Optional: Print what it found so you trust it
                         if top_chunk:
-                            st.metric("Cross-Encoder Score", f"{raw_score:.4f}")
-                    # ... (rest of the mermaid code) ...
+                            with st.expander("See what was rejected (for debugging)"):
+                                st.write(f"Best bad match: {top_chunk['text'][:200]}...")
+                                st.write(f"Relevance Score: {raw_score:.4f}")
 
-                # --- 3. GENERATION ---
-                if not is_relevant:
-                    # ROBUST FAILURE MESSAGE
-                    st.warning("⚠️ The AI determined this question is unrelated to the uploaded PDF.")
-                    
-                    # Optional: Print what it found so you trust it
-                    if top_chunk:
-                        with st.expander("See what was rejected (for debugging)"):
-                            st.write(f"Best bad match: {top_chunk['text'][:200]}...")
-                            st.write(f"Relevance Score: {raw_score:.4f}")
-
-                    response_content = "I couldn't find the answer in the provided documents."
-                    final_scores = []
-                else:
-                    # Scenario: Good Context Found
-                    context_chunks = [s['text'] for s in results['scores']]
-                    
-                    full_response = st.write_stream(
-                        generation_service.generate_answer_stream(
-                            question,
-                            context_chunks,
-                            st.session_state.chat_history
+                        response_content = "I couldn't find the answer in the provided documents."
+                        final_scores = []
+                    else:
+                        # Scenario: Good Context Found
+                        context_chunks = [s['text'] for s in results['scores']]
+                        
+                        full_response = st.write_stream(
+                            generation_service.generate_answer_stream(
+                                question,
+                                context_chunks,
+                                st.session_state.chat_history
+                            )
                         )
-                    )
-                    response_content = full_response
-                    final_scores = results['scores']
-                
-                # --- 4. SAVE HISTORY ---
-                st.session_state.chat_history.append({
-                    'role': 'assistant',
-                    'content': response_content,
-                    'sources': final_scores
-                })
-                st.session_state.conversation_context = question
-                st.rerun()
+                        response_content = full_response
+                        final_scores = results['scores']
+                    
+                    # --- 4. SAVE HISTORY ---
+                    st.session_state.chat_history.append({
+                        'role': 'assistant',
+                        'content': response_content,
+                        'sources': final_scores
+                    })
+                    st.session_state.conversation_context = question
+                    st.rerun()
 
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
-                st.code(traceback.format_exc())
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+                    st.code(traceback.format_exc())
 else:
     # Empty State Hint
     st.info("👈 Upload your PDF documents in the sidebar to begin!")
