@@ -36,7 +36,7 @@ This project addresses two common problems with RAG systems: privacy (no cloud/A
 graph LR
   A[User Query] --> B(Hybrid Search)
   B --> C{Re-ranker Check}
-  C -- Score is Low --> D[Respond: "I don't know"]
+  C -- Score is Low --> D[Respond: I do not know]
   C -- Score is High --> E[Llama 3.2 generates answer]
 ```
 
@@ -125,8 +125,3 @@ Contributions are welcome! Please open an issue to discuss larger changes and su
 This project is released under the MIT License. See the `LICENSE` file for details.
 
 ---
-
-## Contact
-For questions or help, open an issue or contact the repository owner.
-
-*Enjoy building with privacy-first RAG!*
