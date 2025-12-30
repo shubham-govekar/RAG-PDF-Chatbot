@@ -1,72 +1,132 @@
-Local Hybrid RAG Chatbot
-I built this RAG (Retrieval-Augmented Generation) system because I was frustrated with standard RAG pipelines. Too often, they would miss specific keywords or confidently hallucinate answers when the context wasn't there.
+# PDF RAG Chatbot — Local Hybrid Retrieval (Privacy-first)
 
-This project fixes those issues by running everything locally (privacy-first) and using a "Hybrid Search" approach—combining vector search with old-school keyword matching to make sure we actually find what you're looking for.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)  
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-How it works
-The pipeline is pretty straightforward:
+A lightweight, privacy-first RAG (Retrieval-Augmented Generation) chatbot that runs completely locally. It combines vector search with keyword matching for robust retrieval, then re-ranks and validates the best chunks before sending them to an LLM (via Ollama) to generate answers.
 
-Your Query comes in.
+---
 
-We search the documents using Vectors (meaning) and Keywords (exact text).
+## Table of Contents
+- [Overview](#overview)
+- [How it works](#how-it-works)
+- [Tech stack](#tech-stack)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Project structure](#project-structure)
+- [Contributing](#contributing)
+- [License](#license)
 
-We merge those results and use a Re-ranker to pick the absolute best chunks.
+---
 
-If the best chunk isn't good enough (low score), we reject it.
+## Overview
+This project addresses two common problems with RAG systems: privacy (no cloud/API keys needed) and reliability (hybrid retrieval ensures better recall). The system performs:
 
-If it is good, we pass it to Llama 3.2 to generate the final answer.
+- A hybrid search (vector + keyword)
+- Result merging and re-ranking with FlashRank
+- A score-based quality check: low-confidence retrievals are rejected
+- LLM generation via Ollama's Llama 3.2 when confidence is high
 
+---
+
+## How it works
+
+```mermaid
+graph LR
+  A[User Query] --> B(Hybrid Search)
+  B --> C{Re-ranker Check}
+  C -- Score is Low --> D[Respond: "I don't know"]
+  C -- Score is High --> E[Llama 3.2 generates answer]
 ```
-    graph LR
-    A[User Query] --> B(Hybrid Search)
-    B --> C{Re-ranker Check}
-    C -- Score is Low --> D[Say 'I don't know']
-    C -- Score is High --> E[Llama 3.2 generates answer]
-```
 
-Tech Stack
-I kept this lightweight and local so you don't need API keys or cloud credits.
+Key points:
+- Vector search captures semantic similarity
+- Keyword matching ensures exact-term recall
+- FlashRank re-ranks candidate chunks quickly on CPU
+- If the top chunk score is below threshold, the system safely declines to answer
 
-App: Python & Streamlit
+---
 
-LLM: Ollama (running Llama 3.2)
+## Tech stack
+- App: Python + Streamlit (local UI)
+- LLM: Ollama running Llama 3.2 (local)
+- Embeddings / Vector DB: ChromaDB (in-memory)
+- Re-ranker: FlashRank (CPU)
 
-Database: ChromaDB (runs in memory, resets when you close the app)
+---
 
-Re-ranking: FlashRank (super fast, runs on CPU)
+## Requirements
+- Python 3.11+  
+- Ollama installed and running locally (https://ollama.com)  
+- Recommended: a machine with a modern CPU; GPU not required for core components
 
-Getting Started
-1. Prereqs
-You need Python installed, and you need Ollama running in the background.
+---
 
-Download it at ollama.com
+## Installation
+1. Clone the repository:
 
-Run this in your terminal to grab the model: ollama pull llama3.2
-
-2. Install
-Clone the repo and grab the python requirements.
-
+```bash
 git clone https://github.com/yourusername/pdf-rag-chatbot.git
-
 cd pdf-rag-chatbot
+```
 
+2. Install Python dependencies:
+
+```bash
 pip install -r requirements.txt
+```
 
-3. Run it
+3. Install and run Ollama, then pull the model:
+
+```bash
+# Install Ollama via https://ollama.com
+ollama pull llama3.2
+ollama run # keep Ollama running in background
+```
+
+---
+
+## Quick start
+Run the Streamlit app locally:
+
+```bash
 streamlit run app.py
+```
 
-Then just open your browser to http://localhost:8501, drop a PDF in the sidebar, and start chatting.
+Open your browser at http://localhost:8501, upload a PDF from the sidebar, and start chatting.
 
-Project Structure
-If you want to dig into the code:
+Notes:
+- ChromaDB runs in-memory by default — the DB resets when the app is closed.
+- If the re-ranker deems results low-confidence, the app will reply that it doesn't know rather than hallucinate.
 
-app.py: The frontend UI (Streamlit).
+---
 
-src/hybrid_retrieval.py: Where the search magic happens (BM25 + Chroma).
+## Project structure
+- `app.py` — Streamlit frontend and app orchestration
+- `config.py` — configuration and application settings
+- `src/advanced_chunking.py` — PDF chunking and preprocessing
+- `src/embeddings.py` — embedding computation and helpers
+- `src/hybrid_retrieval.py` — hybrid search implementation (BM25 + Chroma)
+- `src/retrieval.py` — retrieval utilities
+- `src/generation.py` — prompt management and Ollama integration
+- `src/ui.py` — UI helpers for Streamlit
+- `src/utils.py` — utility functions
+- `models/` — local models and tokenizers (e.g., FlashRank / MiniLM)
 
-src/generation.py: The logic for sending prompts to Ollama.
+---
 
-src/advanced_chunking.py: How we chop up the PDFs so the AI understands them better.
+## Contributing
+Contributions are welcome! Please open an issue to discuss larger changes and submit PRs for bug fixes or feature additions. Keep contributions small and well-documented.
 
-License
-MIT License. Feel free to fork it and break things!
+---
+
+## License
+This project is released under the MIT License. See the `LICENSE` file for details.
+
+---
+
+## Contact
+For questions or help, open an issue or contact the repository owner.
+
+*Enjoy building with privacy-first RAG!*
