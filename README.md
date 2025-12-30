@@ -1,87 +1,72 @@
-# Advanced PDF RAG Chatbot with Hybrid Retrieval
+Local Hybrid RAG Chatbot
+I built this RAG (Retrieval-Augmented Generation) system because I was frustrated with standard RAG pipelines. Too often, they would miss specific keywords or confidently hallucinate answers when the context wasn't there.
 
-A local, high-precision Retrieval-Augmented Generation (RAG) system engineered to solve common limitations in standard RAG pipelines. This project implements Hybrid Search (Dense Vector + Sparse Keyword), Cross-Encoder Re-ranking, and strict Relevance Gating to minimize hallucinations.
+This project fixes those issues by running everything locally (privacy-first) and using a "Hybrid Search" approach—combining vector search with old-school keyword matching to make sure we actually find what you're looking for.
 
-## Overview
+How it works
+The pipeline is pretty straightforward:
 
-Standard RAG implementations often suffer from retrieval inaccuracies (missing specific keywords) and hallucinated responses when the retrieved context is irrelevant. This project addresses these issues through a multi-stage pipeline:
+Your Query comes in.
 
-1.  **Hybrid Retrieval:** Combines semantic understanding (Vector Search via ChromaDB) with precise keyword matching (BM25) to capture both conceptual and literal queries.
-2.  **Cross-Encoder Re-ranking:** Uses a high-fidelity model (FlashRank/TinyBERT) to re-score retrieval candidates, ensuring the Large Language Model (LLM) receives only the most pertinent information.
-3.  **Relevance Gating:** Implements a hard rejection threshold based on Cross-Encoder scores. If the system detects low relevance between the query and the documents, it refuses to answer rather than fabricating a response.
-4.  **Local Execution:** Fully privacy-focused architecture running locally using Ollama and ephemeral vector stores.
+We search the documents using Vectors (meaning) and Keywords (exact text).
 
-## Technical Architecture
+We merge those results and use a Re-ranker to pick the absolute best chunks.
 
-The system follows a modular pipeline architecture:
+If the best chunk isn't good enough (low score), we reject it.
 
-```mermaid
-graph LR
-    A[User Query] --> B{Intent Classifier}
-    B -- Search --> C[Hybrid Retriever]
-    C --> D[Vector Search] & E[BM25 Keyword Search]
-    D & E --> F[Merged Results]
-    F --> G[Cross-Encoder Re-ranker]
-    G --> H{Relevance Gate}
-    H -- Score < Threshold --> I[Reject Query]
-    H -- Score >= Threshold --> J[Llama 3.2 Context]
+If it is good, we pass it to Llama 3.2 to generate the final answer.
 
-## Key Features
+```
+    graph LR
+    A[User Query] --> B(Hybrid Search)
+    B --> C{Re-ranker Check}
+    C -- Score is Low --> D[Say 'I don't know']
+    C -- Score is High --> E[Llama 3.2 generates answer]
+```
 
-* **Hybrid Search Strategy:** Utilizes a weighted ensemble of Cosine Similarity (Dense) and BM25 (Sparse) to handle various query types effectively.
-* **FlashRank Re-ranking:** Post-process retrieval using a cross-encoder to fix the "Lost in the Middle" phenomenon common in long-context windows.
-* **Parent-Child Chunking:** Retrieves smaller, granular chunks for scoring accuracy while delivering larger "parent" windows to the LLM for better context coherence.
-* **Ephemeral Vector Store:** Initializes a stateless ChromaDB instance in memory for each session, ensuring data privacy and clean state management.
-* **Self-Correction:** The system evaluates the confidence of retrieved chunks and halts generation if the confidence score falls below a set threshold.
+Tech Stack
+I kept this lightweight and local so you don't need API keys or cloud credits.
 
-## Tech Stack
+App: Python & Streamlit
 
-* **Language:** Python 3.10+
-* **Orchestration:** Streamlit
-* **LLM Inference:** Ollama (Local)
-* **Vector Database:** ChromaDB
-* **Embeddings:** HuggingFace / SentenceTransformers
-* **Re-ranking:** FlashRank
-* **Sparse Search:** RankBM25
+LLM: Ollama (running Llama 3.2)
 
-## Installation
+Database: ChromaDB (runs in memory, resets when you close the app)
 
-### 1. Prerequisites
-Ensure you have Python installed. You also need Ollama running locally for the LLM inference.
+Re-ranking: FlashRank (super fast, runs on CPU)
 
-1.  Download Ollama from ollama.com.
-2.  Pull the target model:
-    ollama pull llama3.2
+Getting Started
+1. Prereqs
+You need Python installed, and you need Ollama running in the background.
 
-### 2. Setup Environment
+Download it at ollama.com
 
-Clone the repository and install the required dependencies.
+Run this in your terminal to grab the model: ollama pull llama3.2
+
+2. Install
+Clone the repo and grab the python requirements.
 
 git clone https://github.com/yourusername/pdf-rag-chatbot.git
+
 cd pdf-rag-chatbot
+
 pip install -r requirements.txt
 
-## Usage
+3. Run it
+streamlit run app.py
 
-1.  Start the local development server:
-    streamlit run app.py
+Then just open your browser to http://localhost:8501, drop a PDF in the sidebar, and start chatting.
 
-2.  Navigate to http://localhost:8501 in your browser.
+Project Structure
+If you want to dig into the code:
 
-3.  Upload a PDF document via the sidebar. The system will automatically ingest, chunk, and index the file.
+app.py: The frontend UI (Streamlit).
 
-4.  Input your query. You can view the internal reasoning trace (Intent -> Retrieval -> Re-ranking -> Score) by expanding the "View Detailed Logic" section in the interface.
+src/hybrid_retrieval.py: Where the search magic happens (BM25 + Chroma).
 
-## Project Structure
+src/generation.py: The logic for sending prompts to Ollama.
 
-* app.py: Main application entry point and UI logic.
-* src/: Core logic modules.
-    * hybrid_retrieval.py: Implementation of the Dense+Sparse retrieval strategy and re-ranking.
-    * generation.py: LLM prompting and stream handling.
-    * embeddings.py: Vector embedding generation service.
-    * advanced_chunking.py: Parent-Child document splitting logic.
-* config.py: Configuration settings for thresholds, models, and pathing.
+src/advanced_chunking.py: How we chop up the PDFs so the AI understands them better.
 
-## License
-
-MIT License
+License
+MIT License. Feel free to fork it and break things!
