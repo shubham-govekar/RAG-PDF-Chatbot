@@ -5,7 +5,7 @@ Configuration for RAG Chatbot - Phase 3
 # ============================================================
 # MODEL CONFIGURATION
 # ============================================================
-OLLAMA_MODEL = "llama3.2:1b"
+OLLAMA_MODEL = "qwen2.5:1.5b"
 EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 RERANKER_MODEL = "ms-marco-MiniLM-L-12-v2"
 RERANKER_CACHE_DIR = "./models"

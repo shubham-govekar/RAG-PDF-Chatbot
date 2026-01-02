@@ -10,9 +10,9 @@ import traceback
 import config
 from src.embeddings import get_embedding_service
 from src.generation import get_generation_service
-from src.utils import format_sources, get_confidence_badge
+from src.utils import get_confidence_badge
 from src.advanced_chunking import process_pdf_parent_child
-import src.ui as ui  # Your new Glossy UI module
+import src.ui as ui 
 
 # Import appropriate retrieval service based on config
 if config.USE_HYBRID_SEARCH:
@@ -302,8 +302,11 @@ if st.session_state.processed:
                     is_relevant = top_chunk and raw_score >= 0.2
                     
                     # Update UI based on this robust check
+                    # Update UI based on this robust check
                     if is_relevant:
-                        status.update(label=f"✅ Context Retrieved! (Relevance: {raw_score:.2f})", state="complete", expanded=False)
+                        # Use the utility to get the right color/emoji based on score
+                        badge, color_class = get_confidence_badge(raw_score)
+                        status.update(label=f"{badge} Context Retrieved! (Relevance: {raw_score:.2f})", state="complete", expanded=False)
                     else:
                         status.update(label="❌ Query unrelated to Document", state="error", expanded=False)
 
@@ -357,7 +360,9 @@ if st.session_state.processed:
                         'content': response_content,
                         'sources': final_scores
                     })
-                    st.session_state.conversation_context = question
+                    
+                    # FIX: Save both Question AND Answer so the AI knows what "it" refers to next time
+                    st.session_state.conversation_context = f"User: {question}\nAssistant: {response_content}"
                     st.rerun()
 
                 except Exception as e:
