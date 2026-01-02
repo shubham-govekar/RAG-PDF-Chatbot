@@ -26,7 +26,7 @@ This project addresses two common problems with RAG systems: privacy (no cloud/A
 - A hybrid search (vector + keyword)
 - Result merging and re-ranking with FlashRank
 - A score-based quality check: low-confidence retrievals are rejected
-- LLM generation via Ollama's Llama 3.2 when confidence is high
+- LLM generation via Ollama (configurable model; default: `qwen2.5:1.5b`) when confidence is high
 
 ---
 
@@ -37,7 +37,7 @@ graph LR
   A[User Query] --> B(Hybrid Search)
   B --> C{Re-ranker Check}
   C -- Score is Low --> D[Respond: I do not know]
-  C -- Score is High --> E[Llama 3.2 generates answer]
+  C -- Score is High --> E[LLM generates answer (via Ollama)]
 ```
 
 Key points:
@@ -50,7 +50,7 @@ Key points:
 
 ## Tech stack
 - App: Python + Streamlit (local UI)
-- LLM: Ollama running Llama 3.2 (local)
+- LLM: Ollama running a local model (default: `qwen2.5:1.5b`)
 - Embeddings / Vector DB: ChromaDB (in-memory)
 - Re-ranker: FlashRank (CPU)
 
@@ -81,7 +81,8 @@ pip install -r requirements.txt
 
 ```bash
 # Install Ollama via https://ollama.com
-ollama pull llama3.2
+# Pull the model referenced in `config.py` (default: `qwen2.5:1.5b`)
+ollama pull qwen2.5:1.5b
 ollama run # keep Ollama running in background
 ```
 
