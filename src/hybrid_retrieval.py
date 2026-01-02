@@ -292,10 +292,53 @@ def get_hybrid_retrieval_service():
     return _retrieval_service
 
 # Keep this for backward compatibility with app.py imports
-def reformulate_query(query, context):
-    # This just needs to be importable; the logic is likely in utils or handled elsewhere
-    # depending on your exact file structure. If you need the actual logic here:
-    import ollama
-    if not context: return query
-    # ... (Your regex check) ...
-    return query # Placeholder if you import the real one in app.py
+import ollama
+def reformulate_query(query: str, history: str) -> str:
+    """
+    Uses LLM to rewrite the query with context, removing pronouns.
+    Includes cleaning logic to prevent "Chatter" from ruining the search.
+    """
+    if not history or len(history.strip()) < 10:
+        return query
+
+    prompt = (
+        "You are a query rewriting engine. Your ONLY job is to rewrite the last question "
+        "to be self-contained, replacing pronouns (it, they, this) with specific entities "
+        "from the history.\n"
+        "RULES:\n"
+        "1. Output ONLY the rewritten query. Do NOT say 'Here is the query' or 'Sure'.\n"
+        "2. If no rewrite is needed, output the original query.\n"
+        "3. Do not answer the question. Just rewrite it.\n\n"
+        f"--- Conversation History ---\n{history}\n\n"
+        f"--- Current Question ---\n{query}\n\n"
+        f"--- Rewritten Query ---"
+    )
+
+    try:
+        # Use simple generation for speed and strictness
+        response = ollama.generate(
+            model=config.OLLAMA_MODEL,
+            prompt=prompt,
+            options={'temperature': 0.0}
+        )
+        rewritten = response['response'].strip()
+        
+        # Safety: If LLM is chatty, strip common prefixes
+        prefixes = ["here is", "rewritten:", "query:", "sure", "the query is"]
+        lower_rewritten = rewritten.lower()
+        
+        for p in prefixes:
+            if lower_rewritten.startswith(p):
+                # Simple split to get the part after the colon or prefix
+                parts = rewritten.split(':', 1)
+                if len(parts) > 1:
+                    rewritten = parts[1].strip()
+                else:
+                    rewritten = rewritten.replace(p, "", 1).strip()
+        
+        # Remove quotes
+        return rewritten.strip('"').strip("'")
+
+    except Exception as e:
+        print(f"⚠️ Reformulation failed: {e}")
+        return query
