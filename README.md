@@ -37,7 +37,7 @@ graph LR
   A[User Query] --> B(Hybrid Search)
   B --> C{Re-ranker Check}
   C -- Score is Low --> D[Respond: I do not know]
-  C -- Score is High --> E[LLM generates answer (via Ollama)]
+  C -- Score is High --> E["LLM generates answer (via Ollama)"]
 ```
 
 Key points:
