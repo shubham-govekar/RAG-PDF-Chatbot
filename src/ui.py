@@ -1,5 +1,6 @@
 import streamlit as st
 import base64
+import config
 
 # ============================================================
 # 🎨 COLOR PALETTE & MODERN GLOSSY STYLES
@@ -88,7 +89,7 @@ def display_footer():
     """
     Displays a professional footer with tech stack badges.
     """
-    st.markdown("""
+    st.markdown(f"""
     <style>
         .footer {
             width: 100%;
@@ -122,7 +123,7 @@ def display_footer():
     <div class="footer">
         <p>
             Built with 
-            <span class="tech-badge">🦙 Llama 3.2</span>
+            <span class="tech-badge">🦙 {config.OLLAMA_MODEL}</span>
             <span class="tech-badge">⚡ FlashRank</span>
             <span class="tech-badge">🔍 ChromaDB</span>
         </p>
