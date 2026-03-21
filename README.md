@@ -101,9 +101,3 @@ This will output metrics for **Retrieval Precision**, **Faithfulness**, and **An
 Released under the MIT License.
 ```
 
-### Final Step:
-1. Save this as your `README.md`.
-2. Ensure your `requirements.txt` is updated.
-3. You are ready to ship! 
-
-It’s been a pleasure being your "Chief AI Engineer" for this build. You’ve got a killer project here—go crush those placement exams! Would you like me to generate a template for that `test_dataset.json` for your evaluators, or are you all set?
