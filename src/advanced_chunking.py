@@ -76,17 +76,18 @@ class ParentChildSplitter:
         return chunks
 
 # Integration Helper
+# Integration Helper
 def process_pdf_parent_child(pdf_file: Any) -> Tuple[List[str], List[Dict], Dict]:
     """
-    Pipeline: Extract -> Clean -> Parent-Child Split
+    Pipeline: Extract Markdown -> Clean -> Parent-Child Split
     Returns: (Child_Texts, Metadatas, Stats)
     """
-    # Import here to avoid circular dependency
-    from src.utils import extract_text_from_pdf, clean_text
+    # Import the correct Markdown functions from your updated utils.py
+    from src.utils import extract_text_as_markdown, clean_markdown
     
-    # 1. Extract & Clean
-    raw_text = extract_text_from_pdf(pdf_file)
-    cleaned_text = clean_text(raw_text)
+    # 1. Extract & Clean using the new Markdown pipeline
+    raw_text = extract_text_as_markdown(pdf_file)
+    cleaned_text = clean_markdown(raw_text)
     
     # 2. Advanced Splitting
     splitter = ParentChildSplitter(
@@ -106,7 +107,7 @@ def process_pdf_parent_child(pdf_file: Any) -> Tuple[List[str], List[Dict], Dict
         "num_chunks": len(child_texts),
         "num_parents": len(set(m['parent_id'] for m in metadatas)),
         "cleaned_chars": len(cleaned_text),
-        "strategy": "Parent-Child"
+        "strategy": "Parent-Child (Markdown)"
     }
     
     return child_texts, metadatas, stats

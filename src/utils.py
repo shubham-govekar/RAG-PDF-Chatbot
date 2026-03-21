@@ -1,88 +1,42 @@
-import fitz  # PyMuPDF
+import pymupdf4llm
 import re
-from typing import List, Tuple, Dict, Any
-from collections import defaultdict
-import config
+import os
+import tempfile
+from typing import Any
 
-def extract_text_from_pdf(pdf_file: Any) -> str:
-    """Extract raw text using PyMuPDF."""
-    # Reset file pointer just in case
-    pdf_file.seek(0)
-    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
-    text = ""
-    for page in doc:
-        text += page.get_text()
-    return text
-
-def clean_text(text: str) -> str:
-    """Remove noise (page nums, urls, emails, short lines)."""
-    # Remove emails
-    text = re.sub(r'\S+@\S+', '', text)
-    # Remove URLs
-    text = re.sub(r'http\S+|www\S+', '', text)
-    # Remove page numbers (isolated digits)
-    text = re.sub(r'^\d+\s*$', '', text, flags=re.MULTILINE)
-    # Collapse whitespace
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
-
-def chunk_text(text: str, chunk_size: int = config.CHUNK_SIZE, overlap: int = config.CHUNK_OVERLAP) -> List[str]:
-    """Sliding window chunking."""
-    if not text:
-        return []
+def extract_text_as_markdown(pdf_file: Any) -> str:
+    """
+    Extracts text as Markdown using pymupdf4llm.
+    Preserves Tables, Headers, and Equations.
+    """
+    try:
+        # Create a temporary file because pymupdf4llm expects a file path
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(pdf_file.read())
+            tmp_path = tmp.name
         
-    if len(text) <= chunk_size:
-        return [text]
-    
-    chunks = []
-    start = 0
-    text_len = len(text)
-    
-    while start < text_len:
-        end = start + chunk_size
-        chunk = text[start:end]
+        # Convert to Markdown (Preserves tables as | Col | Col |)
+        md_text = pymupdf4llm.to_markdown(tmp_path)
         
-        # Only add chunk if it has meaningful content
-        if len(chunk.strip()) > 50: 
-            chunks.append(chunk)
-            
-        start += (chunk_size - overlap)
+        # Cleanup
+        os.remove(tmp_path)
+        return md_text
         
-    return chunks
+    except Exception as e:
+        return f"Error reading PDF: {str(e)}"
 
-def process_pdf(pdf_file: Any) -> Tuple[List[str], Dict[str, Any]]:
+def clean_markdown(text: str) -> str:
     """
-    Pipeline: Extract -> Clean -> Chunk.
-    Returns chunks and stats dict for app.py.
+    Markdown-safe cleaning. 
+    Unlike plain text cleaning, we MUST preserve newlines and pipe characters for tables.
     """
-    raw_text = extract_text_from_pdf(pdf_file)
-    cleaned_text = clean_text(raw_text)
-    chunks = chunk_text(cleaned_text)
+    # 1. Remove page numbers (isolated digits on their own line)
+    text = re.sub(r'^\s*\d+\s*$', '', text, flags=re.MULTILINE)
     
-    # Stats expected by app.py line 195
-    stats = {
-        "num_chunks": len(chunks),
-        "cleaned_chars": len(cleaned_text),
-        "raw_chars": len(raw_text)
-    }
-    return chunks, stats
-
-def format_sources(sources: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-    """Group source chunks by PDF filename for the UI."""
-    grouped = defaultdict(list)
-    for src in sources:
-        name = src.get('pdf_name', 'Unknown')
-        grouped[name].append(src)
-    return dict(grouped)
-
-def get_confidence_badge(confidence: float) -> Tuple[str, str]:
-    """
-    Return emoji and css class based on score.
-    Input confidence is expected to be 0-100 scale here (adjusted in retrieval.py).
-    """
-    if confidence >= 60:
-        return "🟢", "confidence-high"
-    elif confidence >= 45:
-        return "🟡", "confidence-medium"
-    else:
-        return "🔴", "confidence-low"
+    # 2. Fix common markdown issues (e.g. ###Header -> ### Header)
+    text = re.sub(r'^(#+)([^#\s])', r'\1 \2', text, flags=re.MULTILINE)
+    
+    # 3. Collapse excessive vertical whitespace (3+ newlines -> 2)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text.strip()

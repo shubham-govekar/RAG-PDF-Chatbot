@@ -1,0 +1,56 @@
+{
+    "summary": {
+        "avg_faithfulness": 3.75,
+        "avg_relevance": 4.75
+    },
+    "details": [
+        {
+            "question": "What is the title of the fake review detection paper?",
+            "expected": "High performance fake review detection using pretrained DeBERTa optimized with Monarch Butterfly paradigm.",
+            "generated": "The title of the fake review detection paper is \"MBO-DeBERTa: A Novel Model for Fake Review Detection.\"",
+            "intent_detected": "SEARCH",
+            "latency_seconds": 25.39,
+            "chunks_retrieved": 5,
+            "scores": {
+                "faithfulness": 3,
+                "relevance": 4
+            }
+        },
+        {
+            "question": "What three datasets were used to test the proposed framework?",
+            "expected": "The proposed framework was tested on the Amazon, Fake Review, and Deceptive Opinion Spam datasets.",
+            "generated": "The three datasets used to test the proposed framework are Amazon, Fake Review and Deceptive Opinion Spam containing 21000,40000 and 1600 reviews respectively.",
+            "intent_detected": "SEARCH",
+            "latency_seconds": 37.39,
+            "chunks_retrieved": 5,
+            "scores": {
+                "faithfulness": 3,
+                "relevance": 5
+            }
+        },
+        {
+            "question": "Why is Monarch Butterfly Optimization (MBO) a good choice for fake review detection?",
+            "expected": "MBO is a good choice due to its efficient and adaptive search capabilities, which are crucial for optimizing hyperparameters and feature selection. Its ability to balance exploration and exploitation ensures robust performance even with noisy and variable review data.",
+            "generated": "Monarch Butterfly Optimization (MBO) is chosen as the algorithm for detecting fake reviews due to its efficient and adaptive search capabilities, which are crucial for optimizing hyperparameters and feature selection in complex datasets. MBO's ability to balance exploration and exploitation ensures robust performance even with noisy and variable review data, while its global optimization process helps avoid local optima and achieve superior model accuracy. These characteristics make MBO a powerful algorithm that enhances the effectiveness of fake review detection by improving the efficiency and reliability of identifying fraudulent reviews through optimized feature selection and tuning of parameters using DeBERTa.",
+            "intent_detected": "SEARCH",
+            "latency_seconds": 34.66,
+            "chunks_retrieved": 5,
+            "scores": {
+                "faithfulness": 5,
+                "relevance": 5
+            }
+        },
+        {
+            "question": "What classification accuracy did MBO-DeBERTa achieve for detecting fake reviews?",
+            "expected": "MBO-DeBERTa attained a classification accuracy of 98% for detecting fake reviews.",
+            "generated": "MBO-DeBERTa achieved a classification accuracy of 98% for detecting the fake reviews.",
+            "intent_detected": "SEARCH",
+            "latency_seconds": 27.83,
+            "chunks_retrieved": 5,
+            "scores": {
+                "faithfulness": 4,
+                "relevance": 5
+            }
+        }
+    ]
+}

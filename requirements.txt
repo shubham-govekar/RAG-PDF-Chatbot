@@ -11,3 +11,4 @@ pypdf
 tiktoken
 sentence-transformers
 numpy
+pymupdf4llm

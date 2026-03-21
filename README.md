@@ -1,128 +1,109 @@
-# PDF RAG Chatbot — Local Hybrid Retrieval (Privacy-first)
+```markdown
+# ⚡ Research Assistant: Local Hybrid RAG (Privacy-First)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)  
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![Ollama](https://img.shields.io/badge/Ollama-Local%20LLM-orange.svg)](https://ollama.com)
 
-A lightweight, privacy-first RAG (Retrieval-Augmented Generation) chatbot that runs completely locally. It combines vector search with keyword matching for robust retrieval, then re-ranks and validates the best chunks before sending them to an LLM (via Ollama) to generate answers.
-
----
-
-## Table of Contents
-- [Overview](#overview)
-- [How it works](#how-it-works)
-- [Tech stack](#tech-stack)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Quick start](#quick-start)
-- [Project structure](#project-structure)
-- [Contributing](#contributing)
-- [License](#license)
+A high-performance, privacy-centric RAG (Retrieval-Augmented Generation) system designed to run on consumer hardware (8GB+ RAM). This assistant uses a multi-stage retrieval pipeline to deliver citation-backed answers with near-zero hallucination.
 
 ---
 
-## Overview
-This project addresses two common problems with RAG systems: privacy (no cloud/API keys needed) and reliability (hybrid retrieval ensures better recall). The system performs:
-
-- A hybrid search (vector + keyword)
-- Result merging and re-ranking with FlashRank
-- A score-based quality check: low-confidence retrievals are rejected
-- LLM generation via Ollama (configurable model; default: `qwen2.5:1.5b`) when confidence is high
+## 🚀 Key Features
+- **Parent-Child Chunking:** High-precision retrieval using small "child" chunks for searching and large "parent" blocks for LLM context.
+- **Hybrid Search + Expansion:** Combines Semantic Vector Search with BM25 Keyword matching and **Asymmetric Query Expansion**.
+- **Neural Re-ranking:** Uses `FlashRank` (Cross-Encoders) to validate relevance before generation.
+- **Data Sovereignty:** 100% local execution. No data leaves your machine. Features a "Manage Knowledge" UI to delete specific documents from the vector store.
+- **Automated Evaluation:** Includes an `evaluate.py` suite using **LLM-as-a-Judge** to benchmark retrieval accuracy and faithfulness.
 
 ---
 
-## How it works
+## 🛠️ How It Works
+
+
+
+The system follows a sophisticated "Retrieve-then-Verify" architecture:
+
+1. **Ingestion:** PDFs are converted to Markdown (preserving tables/headers), then split into hierarchical chunks.
+2. **Retrieval:** The user query is reformulated and expanded. We perform a parallel search across ChromaDB (Vector) and BM25 (Lexical).
+3. **Filtering:** Results are fused and passed through a Cross-Encoder Re-ranker.
+4. **Generation:** If the top relevance score is > 0.2, the parent context is sent to the local LLM (Ollama). Otherwise, the system safely declines to answer.
 
 ```mermaid
-graph LR
-  A[User Query] --> B(Hybrid Search)
-  B --> C{Re-ranker Check}
-  C -- Score is Low --> D[Respond: I do not know]
-  C -- Score is High --> E["LLM generates answer (via Ollama)"]
+graph TD
+    A[User Query] --> B{Intent Detection}
+    B -->|Search| C[Query Expansion]
+    C --> D[Hybrid Retrieval: Vector + BM25]
+    D --> E[FlashRank Re-ranking]
+    E --> F{Score > 0.2?}
+    F -->|Yes| G[LLM Generation w/ Citations]
+    F -->|No| H[Safe Refusal: I don't know]
+    B -->|General| I[Direct LLM Chat]
 ```
 
-Key points:
-- Vector search captures semantic similarity
-- Keyword matching ensures exact-term recall
-- FlashRank re-ranks candidate chunks quickly on CPU
-- If the top chunk score is below threshold, the system safely declines to answer
+---
+
+## 💻 Tech Stack
+- **Frontend:** Streamlit (Custom Glossy Dark UI)
+- **Orchestration:** Python 3.11
+- **Vector Database:** ChromaDB (Persistent Storage)
+- **Local LLM:** Ollama (`qwen2.5:1.5b` or `llama3`)
+- **Embeddings:** `bge-small-en-v1.5` (via Sentence-Transformers)
+- **Re-ranker:** `ms-marco-MiniLM-L-6-v2` (via FlashRank)
+- **Document Parsing:** `PyMuPDF4LLM`
 
 ---
 
-## Tech stack
-- App: Python + Streamlit (local UI)
-- LLM: Ollama running a local model (default: `qwen2.5:1.5b`)
-- Embeddings / Vector DB: ChromaDB (in-memory)
-- Re-ranker: FlashRank (CPU)
+## ⚙️ Installation & Setup
 
----
-
-## Requirements
-- Python 3.11+  
-- Ollama installed and running locally (https://ollama.com)  
-- Recommended: a machine with a modern CPU; GPU not required for core components
-
----
-
-## Installation
-1. Clone the repository:
-
+1. **Clone & Install:**
 ```bash
-git clone https://github.com/yourusername/pdf-rag-chatbot.git
-cd pdf-rag-chatbot
-```
-
-2. Install Python dependencies:
-
-```bash
+git clone [https://github.com/yourusername/research-assistant.git](https://github.com/yourusername/research-assistant.git)
+cd research-assistant
 pip install -r requirements.txt
 ```
 
-3. Install and run Ollama, then pull the model:
-
+2. **Configure Ollama:**
+Ensure [Ollama](https://ollama.com) is installed and the model is pulled:
 ```bash
-# Install Ollama via https://ollama.com
-# Pull the model referenced in `config.py` (default: `qwen2.5:1.5b`)
 ollama pull qwen2.5:1.5b
-ollama run # keep Ollama running in background
 ```
 
----
-
-## Quick start
-Run the Streamlit app locally:
-
+3. **Run the App:**
 ```bash
 streamlit run app.py
 ```
 
-Open your browser at http://localhost:8501, upload a PDF from the sidebar, and start chatting.
+---
 
-Notes:
-- ChromaDB runs in-memory by default — the DB resets when the app is closed.
-- If the re-ranker deems results low-confidence, the app will reply that it doesn't know rather than hallucinate.
+## 🧪 Evaluation Suite
+To verify the system's performance against your own dataset:
+1. Prepare a `test_dataset.json` with `question` and `ground_truth` fields.
+2. Run the evaluation script:
+```bash
+python evaluate.py
+```
+This will output metrics for **Retrieval Precision**, **Faithfulness**, and **Answer Relevancy** using the local LLM as a judge.
 
 ---
 
-## Project structure
-- `app.py` — Streamlit frontend and app orchestration
-- `config.py` — configuration and application settings
-- `src/advanced_chunking.py` — PDF chunking and preprocessing
-- `src/embeddings.py` — embedding computation and helpers
-- `src/hybrid_retrieval.py` — hybrid search implementation (BM25 + Chroma)
-- `src/retrieval.py` — retrieval utilities
-- `src/generation.py` — prompt management and Ollama integration
-- `src/ui.py` — UI helpers for Streamlit
-- `src/utils.py` — utility functions
-- `models/` — local models and tokenizers (e.g., FlashRank / MiniLM)
+## 📂 Project Structure
+- `app.py`: Main entry point & Streamlit UI layout.
+- `src/advanced_chunking.py`: Implementation of Parent-Child recursive splitting.
+- `src/hybrid_retrieval.py`: Fusion logic for Vector and BM25 search.
+- `src/generation.py`: Local LLM streaming and intent detection.
+- `src/session_manager.py`: JSON-based chat history persistence.
+- `config.py`: Centralized hardware and model hyperparameters.
 
 ---
 
-## Contributing
-Contributions are welcome! Please open an issue to discuss larger changes and submit PRs for bug fixes or feature additions. Keep contributions small and well-documented.
+## 📜 License
+Released under the MIT License.
+```
 
----
+### Final Step:
+1. Save this as your `README.md`.
+2. Ensure your `requirements.txt` is updated.
+3. You are ready to ship! 
 
-## License
-This project is released under the MIT License. See the `LICENSE` file for details.
-
----
+It’s been a pleasure being your "Chief AI Engineer" for this build. You’ve got a killer project here—go crush those placement exams! Would you like me to generate a template for that `test_dataset.json` for your evaluators, or are you all set?

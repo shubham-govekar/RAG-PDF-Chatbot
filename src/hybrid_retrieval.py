@@ -119,7 +119,8 @@ class HybridSearchStrategy(RetrievalStrategy):
                 # Create a unique key for deduplication
                 key = f"{meta['pdf_name']}_{meta['chunk_index']}"
                 vector_candidates[key] = {
-                    'text': meta.get('parent_text', vector_results['documents'][0][i]),
+                    'text': vector_results['documents'][0][i], # <-- Keep the precise Child Text here
+                    'parent_text': meta.get('parent_text', vector_results['documents'][0][i]), # <-- Store Parent separately
                     'score': score,
                     'meta': meta,
                     'source': 'vector'
@@ -153,7 +154,8 @@ class HybridSearchStrategy(RetrievalStrategy):
                 norm_score = doc_scores[idx] / max_bm25
                 
                 bm25_candidates[key] = {
-                    'text': meta.get('parent_text', chunk_data['text']),
+                    'text': chunk_data['text'], # <-- Keep the precise Child Text here
+                    'parent_text': meta.get('parent_text', chunk_data['text']), # <-- Store Parent separately
                     'score': norm_score,
                     'meta': meta,
                     'source': 'bm25'
@@ -173,14 +175,15 @@ class HybridSearchStrategy(RetrievalStrategy):
             hybrid_score = (v_score * (1 - alpha)) + (k_score * alpha)
             
             # Get the data object (prefer vector source for metadata richness if available)
+            # Get the data object (prefer vector source for metadata richness if available)
             base_obj = vector_candidates.get(key) or bm25_candidates.get(key)
             
             final_candidates[key] = {
-                'text': base_obj['text'],
-                'confidence': hybrid_score, # Use hybrid score as confidence
+                'text': base_obj['text'], # <-- FlashRank evaluates this (The Child)
+                'confidence': hybrid_score, 
                 'pdf_name': base_obj['meta']['pdf_name'],
                 'chunk_index': base_obj['meta']['chunk_index'],
-                'parent_text': base_obj['meta'].get('parent_text', base_obj['text'])
+                'parent_text': base_obj['parent_text'] # <-- app.py reads this (The Parent)
             }
 
         # Convert to list and sort
@@ -342,3 +345,36 @@ def reformulate_query(query: str, history: str) -> str:
     except Exception as e:
         print(f"⚠️ Reformulation failed: {e}")
         return query
+
+def expand_query(query: str) -> str:
+    """
+    Uses LLM to generate synonyms or related terms to improve BM25 recall.
+    """
+    prompt = (
+        "You are a search engine optimization tool. Your ONLY job is to generate "
+        "3 to 5 related keywords or synonyms for the user's query to help find relevant documents.\n"
+        "RULES:\n"
+        "1. Output ONLY a single line of comma-separated keywords.\n"
+        "2. Do not include any introductory text, notes, or bullet points.\n\n"
+        f"Query: {query}\n\n"
+        "Keywords:"
+    )
+
+    try:
+        # Temperature 0.3 gives it just enough creativity to find good synonyms
+        response = ollama.generate(
+            model=config.OLLAMA_MODEL,
+            prompt=prompt,
+            options={'temperature': 0.3, 'num_predict': 50} 
+        )
+        keywords = response['response'].strip()
+        
+        # Safety cleaner if the 1.5B model gets chatty
+        if ":" in keywords:
+            keywords = keywords.split(":", 1)[-1].strip()
+            
+        return keywords.replace('"', '').replace('\n', ' ')
+
+    except Exception as e:
+        print(f"⚠️ Query expansion failed: {e}")
+        return ""

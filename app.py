@@ -1,376 +1,286 @@
-"""
-RAG Chatbot Phase 3: Parent-Child Retrieval + Hybrid Search + Modern UI
-"""
 import streamlit as st
 import chromadb
-from datetime import datetime
+import os
+import uuid
 import traceback
-
-# Import internal modules
+import time
 import config
+
+# Internal Modules
 from src.embeddings import get_embedding_service
 from src.generation import get_generation_service
-from src.utils import get_confidence_badge
 from src.advanced_chunking import process_pdf_parent_child
 import src.ui as ui 
+from src.session_manager import get_all_sessions, load_session, save_session, delete_session
 
-# Import appropriate retrieval service based on config
+# Import Retrieval Logic
 if config.USE_HYBRID_SEARCH:
     from src.hybrid_retrieval import get_hybrid_retrieval_service as get_retrieval_service
-    from src.hybrid_retrieval import reformulate_query
+    from src.hybrid_retrieval import reformulate_query, expand_query
 else:
     from src.retrieval import get_retrieval_service, reformulate_query
 
 # ============================================================
-# PAGE CONFIGURATION
+# 1. SETUP
 # ============================================================
 st.set_page_config(
-    page_title=config.PAGE_TITLE,
-    page_icon=config.PAGE_ICON,
-    layout="centered"
+    page_title="Research Assistant",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
-
-# 1. LOAD STYLES & HEADER
 ui.load_custom_css()
 
-phase_info = "Phase 3: Hybrid + Parent-Child" if config.USE_HYBRID_SEARCH else "Phase 1: Vector Search"
-ui.display_header(
-    title="PDF RAG Assistant", 
-    subtitle=f"{phase_info} | Powered by Llama 3.2"
-)
+# Database
+DB_PATH = os.path.join(os.getcwd(), "chroma_db_data")
+client = chromadb.PersistentClient(path=DB_PATH)
 
-# Optional Hero Image
-if 'processed' not in st.session_state:
-    st.session_state.processed = False
-    
-
-# ============================================================
-# SESSION STATE INITIALIZATION
-# ============================================================
+# Initialize Collection Early for Sidebar UI
 if 'collection' not in st.session_state:
-    st.session_state.collection = None
-if 'pdf_names' not in st.session_state:
-    st.session_state.pdf_names = []
-if 'chunk_count' not in st.session_state:
-    st.session_state.chunk_count = 0
-if 'chat_history' not in st.session_state:
-    st.session_state.chat_history = []
-if 'conversation_context' not in st.session_state:
-    st.session_state.conversation_context = ""
-if 'auto_question' not in st.session_state:
-    st.session_state.auto_question = ''
-    # Initialize a counter to force-reset the uploader
-if 'uploader_key' not in st.session_state:
-    st.session_state.uploader_key = 0
+    try: 
+        st.session_state.collection = client.get_collection(config.COLLECTION_NAME)
+    except Exception: 
+        st.session_state.collection = None
 
-# Initialize services
+# Session
+if 'session_id' not in st.session_state: st.session_state.session_id = str(uuid.uuid4())
+if 'chat_history' not in st.session_state: st.session_state.chat_history = []
+if 'conversation_context' not in st.session_state: st.session_state.conversation_context = ""
+
+# Services
 embedding_service = get_embedding_service()
 retrieval_service = get_retrieval_service()
 generation_service = get_generation_service()
 
+# --- MISSING FIX RESTORED: Rebuild BM25 Index on Startup ---
+if config.USE_HYBRID_SEARCH and st.session_state.collection:
+    search_strategy = retrieval_service.strategies.get('SEARCH')
+    if search_strategy and not search_strategy.bm25:
+        all_docs = st.session_state.collection.get(include=['documents', 'metadatas'])
+        if all_docs and all_docs.get('documents'):
+            retrieval_service.build_bm25_index(all_docs['documents'], all_docs['metadatas'])
+# -----------------------------------------------------------
+
 # ============================================================
-# SIDEBAR
+# 2. SIDEBAR (The Command Center)
 # ============================================================
 with st.sidebar:
-    st.header("📄 Upload PDFs")
+    # 1. Primary Action
+    if st.button("＋ New chat", use_container_width=True, type="primary"):
+        st.session_state.chat_history = []
+        st.session_state.conversation_context = ""
+        st.session_state.session_id = str(uuid.uuid4())
+        st.rerun()
     
-    # Reset Button
-    if st.session_state.processed:
-        if st.button("🔄 Reset & Upload New"):
-            # Clear internal processing state
-            for key in ['processed', 'collection', 'pdf_names', 'chunk_count', 
-                        'chat_history', 'conversation_context', 'selected_pdfs']:
-                if key in st.session_state:
-                    del st.session_state[key]
-            
-            # THE FIX: Increment key to force a brand new uploader widget
-            st.session_state.uploader_key += 1 
-            st.rerun()
-    
-    # File Uploader
-    uploaded_files = st.file_uploader(
-        "Choose PDF files",
-        type="pdf",
-        accept_multiple_files=True,
-        # THE FIX: Use the dynamic key
-        key=f"uploader_{st.session_state.uploader_key}" 
-    )
-    
-    # PDF Filter (Focus Mode)
-    if st.session_state.processed and len(st.session_state.pdf_names) > 1:
-        st.markdown("---")
-        st.subheader("🔍 Focus Mode")
-        selected_pdfs = st.multiselect(
-            "Search only in:",
-            options=st.session_state.pdf_names,
-            default=st.session_state.pdf_names
-        )
-        st.session_state.selected_pdfs = selected_pdfs
-    
-    # Statistics
-    if st.session_state.processed:
-        st.markdown("---")
-        st.subheader("📊 Statistics")
-        st.metric("PDFs Loaded", len(st.session_state.pdf_names))
-        st.metric("Total Chunks", st.session_state.chunk_count)
-    
-    # System Status
     st.markdown("---")
-    st.subheader("⚙️ System Status")
     
-    ollama_status = generation_service.check_ollama_available()
-    if ollama_status['available']:
-        st.success(f"✅ Ollama: {config.OLLAMA_MODEL}")
+    # 2. Context & Knowledge Management
+    st.caption("🧠 KNOWLEDGE BASE")
+    
+    active_pdf = None
+    unique_pdfs = []
+    
+    if st.session_state.get('collection'):
+        all_docs = st.session_state.collection.get(include=['metadatas'])
+        if all_docs and all_docs.get('metadatas'):
+            unique_pdfs = list(set([meta['pdf_name'] for meta in all_docs['metadatas']]))
+            
+    if unique_pdfs:
+        # Active Document Selector
+        unique_pdfs_dropdown = ["All Documents"] + unique_pdfs
+        selected = st.selectbox("🎯 Active Context", unique_pdfs_dropdown, label_visibility="collapsed")
+        if selected != "All Documents":
+            active_pdf = [selected]
+            
+        # Knowledge Manager Expander
+        with st.expander("📂 Manage Documents", expanded=False):
+            # Uploader moved inside the sidebar
+            uploaded_files = st.file_uploader("Add new PDFs", type="pdf", accept_multiple_files=True, key="uploader_populated")
+            if uploaded_files and st.button("Ingest", key="ingest_populated"):
+                with st.spinner("Ingesting and embedding chunks..."):
+                    embedding_service.load_model()
+                    for pdf in uploaded_files:
+                        child_texts, metadatas, stats = process_pdf_parent_child(pdf)
+                        embeddings = embedding_service.embed_texts(child_texts)
+                        for i, meta in enumerate(metadatas):
+                            meta["source"] = pdf.name
+                            meta["pdf_name"] = pdf.name
+                            if "chunk_index" not in meta:
+                                meta["chunk_index"] = meta.get("child_index", i)
+                        ids = [f"{pdf.name}_child_{i}_{uuid.uuid4().hex[:4]}" for i in range(len(child_texts))]
+                        st.session_state.collection.add(embeddings=embeddings, documents=child_texts, metadatas=metadatas, ids=ids)
+                    
+                    if config.USE_HYBRID_SEARCH:
+                        docs = st.session_state.collection.get()
+                        if docs['documents']: retrieval_service.build_bm25_index(docs['documents'], docs['metadatas'])
+                    st.rerun()
+                    
+            st.divider()
+            st.write("Stored Files:")
+            
+            # The "Delete Specific File" Logic
+            for pdf in unique_pdfs:
+                col1, col2 = st.columns([0.85, 0.15])
+                col1.markdown(f"<span style='font-size: 0.8rem;'>📄 {pdf[:20]}</span>", unsafe_allow_html=True)
+                if col2.button("✕", key=f"del_pdf_{pdf}", help=f"Remove {pdf} from database"):
+                    st.session_state.collection.delete(where={"pdf_name": pdf})
+                    st.rerun()
     else:
-        st.error("❌ Ollama not running")
-    
-    emb_info = embedding_service.get_model_info()
-    if emb_info['loaded']:
-        st.success(f"✅ Embeddings: {config.EMBEDDING_MODEL}")
-    
-    if config.USE_HYBRID_SEARCH:
-        st.success(f"✅ Hybrid Search Active")
-    
-    if config.ENABLE_RERANKING:
-        st.success(f"✅ Re-ranker Active")
+        # Empty state UI
+        st.info("Database is empty. Upload a PDF to begin.")
+        uploaded_files = st.file_uploader("Add new PDFs", type="pdf", accept_multiple_files=True, key="uploader_empty")
+        if uploaded_files and st.button("Ingest", key="ingest_empty"):
+            with st.spinner("Ingesting and embedding chunks..."):
+                embedding_service.load_model()
+                collection = client.get_or_create_collection(name=config.COLLECTION_NAME, metadata={"hnsw:space": config.DISTANCE_METRIC})
+                st.session_state.collection = collection
+                
+                for pdf in uploaded_files:
+                    child_texts, metadatas, stats = process_pdf_parent_child(pdf)
+                    embeddings = embedding_service.embed_texts(child_texts)
+                    for i, meta in enumerate(metadatas):
+                        meta["source"] = pdf.name
+                        meta["pdf_name"] = pdf.name
+                        if "chunk_index" not in meta:
+                            meta["chunk_index"] = meta.get("child_index", i)
+                    ids = [f"{pdf.name}_child_{i}_{uuid.uuid4().hex[:4]}" for i in range(len(child_texts))]
+                    collection.add(embeddings=embeddings, documents=child_texts, metadatas=metadatas, ids=ids)
+                
+                if config.USE_HYBRID_SEARCH:
+                    docs = collection.get()
+                    if docs['documents']: retrieval_service.build_bm25_index(docs['documents'], docs['metadatas'])
+                st.rerun()
 
-    # Export Chat
-    if st.session_state.chat_history:
-        st.markdown("---")
-        if st.button("💾 Download Chat"):
-            export = f"# PDF RAG Chat\n**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
-            for msg in st.session_state.chat_history:
-                role = "User" if msg['role'] == "user" else "AI"
-                export += f"**{role}:** {msg['content']}\n\n"
-            st.download_button("📥 Save .md", export, file_name="chat.md")
+    st.markdown("---")
+    
+    # 3. Chat History (Moved to bottom)
+    st.caption("💬 RECENT CHATS")
+    recent_sessions = get_all_sessions()
+    for session in recent_sessions:
+        title = session['title']
+        if len(title) > 30: title = title[:27] + "..."
+        
+        col_chat, col_del = st.columns([0.85, 0.15])
+        
+        with col_chat:
+            is_active = session["id"] == st.session_state.session_id
+            label = f"🔵 {title}" if is_active else title
+            
+            if st.button(label, key=f"load_{session['id']}"):
+                data = load_session(session['id'])
+                if data:
+                    st.session_state.chat_history = data['messages']
+                    st.session_state.conversation_context = data.get('context', "")
+                    st.session_state.session_id = session['id']
+                    st.rerun()
+        
+        with col_del:
+            if st.button("✕", key=f"del_{session['id']}", help="Delete"):
+                delete_session(session['id'])
+                if session['id'] == st.session_state.session_id:
+                     st.session_state.chat_history = []
+                     st.session_state.session_id = str(uuid.uuid4())
+                st.rerun()
 
 # ============================================================
-# PDF PROCESSING (PHASE 3: PARENT-CHILD + ROBUST STATE)
+# 3. MAIN WORKSPACE
 # ============================================================
-if uploaded_files and not st.session_state.processed:
-    with st.spinner("🔄 Processing PDFs with Advanced Strategy..."):
+ui.display_header(subtitle=config.OLLAMA_MODEL)
+
+# --- Hero ---
+if not st.session_state.chat_history:
+    ui.display_hero()
+
+# --- Chat Interface (With Avatars) ---
+for msg in st.session_state.chat_history:
+    avatar_icon = "🧑‍💻" if msg['role'] == "user" else "🤖"
+    
+    with st.chat_message(msg['role'], avatar=avatar_icon):
+        st.markdown(msg['content'])
+        
+        if msg['role'] == 'assistant' and 'sources' in msg and msg['sources']:
+            with st.expander("Verified Sources", expanded=False):
+                for src in msg['sources']:
+                    ui.render_source_card(
+                        pdf_name=src.get('pdf_name', 'Unknown'),
+                        text=src.get('text', ''),
+                        score=src.get('rerank_score', src.get('score', 0))
+                    )
+        
+        # Display the performance stats badge
+        if msg['role'] == 'assistant' and 'stats' in msg and msg['stats']:
+            st.caption(f"⚡ {msg['stats']}")
+
+# --- Input ---
+# Disable chat input if database is empty
+chat_disabled = not bool(unique_pdfs)
+placeholder_text = "Upload a PDF in the sidebar to begin..." if chat_disabled else "Ask about your documents..."
+
+if question := st.chat_input(placeholder_text, disabled=chat_disabled):
+    st.session_state.chat_history.append({"role": "user", "content": question})
+    with st.chat_message("user", avatar="🧑‍💻"): 
+        st.markdown(question)
+
+    with st.chat_message("assistant", avatar="🤖"):
+        placeholder = st.empty()
+        
         try:
-            embedding_service.load_model()
+            start_time = time.time()  # Start the performance timer
+            context_chunks = []
+            final_scores = []
+            stats_msg = ""
+            expanded_msg = ""
             
-            # ChromaDB Setup
-            client = chromadb.Client()
-            try:
-                client.delete_collection(config.COLLECTION_NAME)
-            except:
-                pass
+            if st.session_state.collection:
+                reformulated = reformulate_query(question, st.session_state.conversation_context)
+                current_intent = generation_service.detect_intent(reformulated)
+                
+                search_text = reformulated
+                if current_intent == 'SEARCH' and config.ENABLE_QUERY_EXPANSION:
+                    expanded_terms = expand_query(reformulated)
+                    if expanded_terms:
+                        search_text = f"{reformulated} {expanded_terms}"
+                        expanded_msg = " | Expanded Query"
+                
+                results = retrieval_service.retrieve(
+                    intent=current_intent,
+                    collection=st.session_state.collection,
+                    query_text=search_text,  
+                    query_emb=embedding_service.embed_query(reformulated),
+                    filter_pdfs=active_pdf 
+                )
+                
+                if results['scores']:
+                    top = results['scores'][0].get('rerank_score', results['scores'][0].get('confidence', 0))
+                    if top >= 0.2:
+                        context_chunks = [s.get('parent_text', s['text']) for s in results['scores']]
+                        final_scores = results['scores']
+
+            full_response = ""
+            stream = generation_service.generate_answer_stream(question, context_chunks, st.session_state.chat_history)
             
-            collection = client.create_collection(
-                name=config.COLLECTION_NAME,
-                metadata={"hnsw:space": config.DISTANCE_METRIC}
-            )
+            for chunk in stream:
+                full_response += chunk
+                placeholder.markdown(full_response + "▌")
             
-            # --- 1. SETUP LOCAL LISTS (Fixes Duplicate Bug) ---
-            # We use a local list 'current_pdf_names' instead of appending directly to session state.
-            # This ensures we start with 0 names every time we process.
-            current_pdf_names = [] 
-            all_chunks = []
-            all_metadatas = []
-            all_ids = []
-            chunk_counter = 0
+            placeholder.markdown(full_response)
             
-            # Process Loop
-            for pdf_file in uploaded_files:
-                with st.spinner(f"📄 Analyzing {pdf_file.name}..."):
-                    # Add name to local list
-                    current_pdf_names.append(pdf_file.name)
-                    
-                    # Phase 3: Parent-Child Processing
-                    child_chunks, metadatas, stats = process_pdf_parent_child(pdf_file)
-                    
-                    st.write(f"✅ **{pdf_file.name}**")
-                    st.caption(f"Strategy: {stats['strategy']} | {stats['num_chunks']} children from {stats['num_parents']} parents")
-                    
-                    # Accumulate data
-                    all_chunks.extend(child_chunks)
-                    
-                    for meta in metadatas:
-                        meta['pdf_name'] = pdf_file.name
-                        meta['chunk_index'] = meta['child_index']
-                        
-                        all_metadatas.append(meta)
-                        all_ids.append(f"chunk_{chunk_counter}")
-                        chunk_counter += 1
+            # Calculate Latency and build the stats string
+            latency = round(time.time() - start_time, 1)
+            if final_scores:
+                stats_msg = f"Searched {len(final_scores)} chunks{expanded_msg} | {latency}s"
+                st.caption(f"⚡ {stats_msg}")
             
-            # Generate Embeddings
-            with st.spinner(f"🧠 Generating vectors for {len(all_chunks)} chunks..."):
-                all_embeddings = embedding_service.embed_texts(all_chunks, show_progress=True)
-            
-            # Store in ChromaDB
-            collection.add(
-                embeddings=all_embeddings,
-                documents=all_chunks,
-                metadatas=all_metadatas,
-                ids=all_ids
-            )
-            
-            # --- 2. UPDATE STATE ATOMICALLY (Fixes 0 Chunks Bug) ---
-            # Update these BEFORE building BM25, so even if BM25 fails, data is safe.
-            st.session_state.pdf_names = current_pdf_names  # Replaces old list completely
-            st.session_state.chunk_count = chunk_counter
-            st.session_state.collection = collection
-            
-            # Build BM25 Index
-            if config.USE_HYBRID_SEARCH:
-                with st.spinner("🔨 Building Keyword Index..."):
-                    retrieval_service.build_bm25_index(all_chunks, all_metadatas)
-            
-            # Finalize
-            st.session_state.processed = True
-            
-            # Force Rerun to update Sidebar immediately
+            st.session_state.conversation_context = f"User: {question}\nAI: {full_response}"
+            st.session_state.chat_history.append({
+                'role': 'assistant', 
+                'content': full_response, 
+                'sources': final_scores,
+                'stats': stats_msg
+            })
+            save_session(st.session_state.session_id, st.session_state.chat_history, st.session_state.conversation_context)
             st.rerun()
             
         except Exception as e:
-            st.error(f"❌ Error: {str(e)}")
+            st.error(f"Error: {e}")
             st.code(traceback.format_exc())
-
-# ============================================================
-# CHAT INTERFACE
-# ============================================================
-if st.session_state.processed:
-    # 1. Display History
-    for msg in st.session_state.chat_history:
-        with st.chat_message(msg['role']):
-            # Show the main answer
-            st.markdown(msg['content'])
-            
-            # Show Sources (Only for Assistant)
-            if msg['role'] == 'assistant' and 'sources' in msg:
-                with st.expander("📚 View Source Snippets"):
-                    for i, source in enumerate(msg['sources']):
-                        col1, col2 = st.columns([1, 4])
-                        with col1:
-                            st.caption(f"**Ref {i+1}**")
-                            st.caption(f"📄 {source.get('pdf_name', 'Unknown')}")
-                        with col2:
-                            raw_text = source.get('text', 'No text available')
-                            st.info(raw_text[:400] + "...")
-
-    # 2. Chat Input (MUST BE OUTSIDE THE FOR LOOP)
-    question = st.chat_input("Ask about your documents...")
-    
-    if question:
-            # User Message
-            st.session_state.chat_history.append({"role": "user", "content": question})
-            with st.chat_message("user"):
-                st.markdown(question)
-            
-            # Assistant Response
-            with st.chat_message("assistant"):
-                try:
-                    # --- 1. ANIMATED AGENT WORKFLOW ---
-                    with st.status("🧠 Agent Reasoning...", expanded=True) as status:
-                        
-                        # Step A: Reformulation & Routing
-                        st.write("🔍 Analyzing query intent...")
-                        reformulated = reformulate_query(question, st.session_state.conversation_context)
-                        intent = generation_service.detect_intent(reformulated)
-                        st.write(f"👉 Detected Intent: **{intent}**")
-                        
-                        # Step B: Retrieval
-                        st.write(f"📚 Searching documents using {intent} strategy...")
-                        query_emb = embedding_service.embed_query(reformulated)
-                        filter_pdfs = st.session_state.get('selected_pdfs', None)
-                        
-                        results = retrieval_service.retrieve(
-                            intent=intent,
-                            collection=st.session_state.collection,
-                            query_text=reformulated,
-                            query_emb=query_emb,
-                            filter_pdfs=filter_pdfs
-                        )
-                        
-                       # --- Step C: Re-ranking & The "Hard Gate" ---
-                    # We only run the expensive re-ranker for specific "SEARCH" queries
-                    if intent == "SEARCH":
-                        st.write("✨ Re-ranking results with Cross-Encoder...")
-                    
-                    # 1. Get the Top Result
-                    top_chunk = results['scores'][0] if results['scores'] else None
-                    
-                    # 2. THE HARD GATE (FIXED)
-                    # FIX: If 'rerank_score' is missing (because intent was SUMMARY or METADATA), 
-                    # we default to 1.0 (Assume relevance) so we don't block valid answers.
-                    raw_score = top_chunk.get('rerank_score', 1.0) if top_chunk else 0
-                    
-                    # Strict threshold: Only kill it if we HAVE a score and it's low.
-                    is_relevant = top_chunk and raw_score >= 0.2
-                    
-                    # Update UI based on this robust check
-                    # Update UI based on this robust check
-                    if is_relevant:
-                        # Use the utility to get the right color/emoji based on score
-                        badge, color_class = get_confidence_badge(raw_score)
-                        status.update(label=f"{badge} Context Retrieved! (Relevance: {raw_score:.2f})", state="complete", expanded=False)
-                    else:
-                        status.update(label="❌ Query unrelated to Document", state="error", expanded=False)
-
-                    # --- 2. DETAILED TRACE (FIXED) ---
-                    with st.expander("🧠 View Detailed Logic", expanded=False):
-                        col1, col2 = st.columns([1, 2])
-                        with col1:
-                            st.metric("Intent", intent)
-                            st.metric("Chunks Found", len(results['scores']))
-                            # Show the raw score that made the decision
-                            if top_chunk:
-                                st.metric("Relevance Score", f"{raw_score:.4f}")
-                        
-                        with col2:
-                            st.caption("📝 **Reformulated Query:**")
-                            st.code(reformulated, language="text")
-                            if top_chunk:
-                                st.caption("📑 **Top Match Preview:**")
-                                st.info(top_chunk.get('text', '')[:200] + "...")
-
-                    # --- 3. GENERATION ---
-                    if not is_relevant:
-                        # ROBUST FAILURE MESSAGE
-                        st.warning("⚠️ The AI determined this question is unrelated to the uploaded PDF.")
-                        
-                        # Optional: Print what it found so you trust it
-                        if top_chunk:
-                            with st.expander("See what was rejected (for debugging)"):
-                                st.write(f"Best bad match: {top_chunk['text'][:200]}...")
-                                st.write(f"Relevance Score: {raw_score:.4f}")
-
-                        response_content = "I couldn't find the answer in the provided documents."
-                        final_scores = []
-                    else:
-                        # Scenario: Good Context Found
-                        context_chunks = [s['text'] for s in results['scores']]
-                        
-                        full_response = st.write_stream(
-                            generation_service.generate_answer_stream(
-                                question,
-                                context_chunks,
-                                st.session_state.chat_history
-                            )
-                        )
-                        response_content = full_response
-                        final_scores = results['scores']
-                    
-                    # --- 4. SAVE HISTORY ---
-                    st.session_state.chat_history.append({
-                        'role': 'assistant',
-                        'content': response_content,
-                        'sources': final_scores
-                    })
-                    
-                    # FIX: Save both Question AND Answer so the AI knows what "it" refers to next time
-                    st.session_state.conversation_context = f"User: {question}\nAssistant: {response_content}"
-                    st.rerun()
-
-                except Exception as e:
-                    st.error(f"Error: {str(e)}")
-                    st.code(traceback.format_exc())
-else:
-    # Empty State Hint
-    st.info("👈 Upload your PDF documents in the sidebar to begin!")
-
-# Footer
-ui.display_footer()
