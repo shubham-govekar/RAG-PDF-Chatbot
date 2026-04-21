@@ -80,7 +80,8 @@ class GenerationService:
                 r"author(s)?", 
                 r"published (in|by|date)", 
                 r"reference(s)?",
-                r"citation(s)?"
+                r"citation(s)?",
+                r"title"
             ],
             # STRICTER Summary Patterns
             "SUMMARY": [

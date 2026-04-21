@@ -39,4 +39,4 @@ def clean_markdown(text: str) -> str:
     # 3. Collapse excessive vertical whitespace (3+ newlines -> 2)
     text = re.sub(r'\n{3,}', '\n\n', text)
     
-    return text.strip()
+    return text.strip() 
