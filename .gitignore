@@ -1,5 +1,7 @@
 # Local Database & Data
 chroma_db_data/
+parent_docs/
+models/
 chats/
 __pycache__/
 *.pyc
@@ -11,3 +13,15 @@ venv/
 # Temporary/User Files
 temp/
 *.pdf
+
+# Legacy version
+Legacy/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/
