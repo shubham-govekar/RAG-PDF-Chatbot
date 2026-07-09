@@ -2,15 +2,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import streamlit as st
-from src.graph import app  # Your compiled graph
+from src.graph import app  
 from src.nodes import list_available_sources
 
 st.set_page_config(page_title="Local RAG Assistant", layout="wide")
 
 
 def _render_sources(documents, search_query=None, intent=None, target_source=None):
-    """Displays retrieval details for the QA path, or a short note for the
-    summary/chitchat paths, which don't run similarity search at all."""
+    """
+    Renders retrieval metadata or execution path details in the UI expander.
+    Handles conditionally bypassed retrieval for summary and chitchat intents.
+    """
     if intent == "summary":
         st.caption(f"Summarized directly from `{target_source or 'unknown'}` (no similarity search).")
         return
@@ -39,7 +41,7 @@ def _render_sources(documents, search_query=None, intent=None, target_source=Non
         st.divider()
 
 
-# --- Sidebar: adjustable retrieval settings ---
+# --- Sidebar: Retrieval Configuration ---
 with st.sidebar:
     st.header("Retrieval Settings")
     relevance_threshold = st.slider(
@@ -67,11 +69,11 @@ with st.sidebar:
     )
     target_source = None if selected_source == "All documents" else selected_source
 
-# Initialize chat history in session state
+# Initialize session state for chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display history
+# Render existing chat history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -84,14 +86,14 @@ for message in st.session_state.messages:
                     message.get("target_source"),
                 )
 
-# User input
+# Handle new user input
 if prompt := st.chat_input("Ask a question about your documents..."):
-    # Display user message
+    
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Prepare inputs for the graph
+    # Construct state payload and configuration for graph execution
     inputs = {
         "messages": st.session_state.messages,
         "raw_query": prompt,
@@ -103,8 +105,8 @@ if prompt := st.chat_input("Ask a question about your documents..."):
     generation = "I'm sorry, I couldn't find an answer."
 
     with st.chat_message("assistant"):
-        # NOTE: label kept generic since the graph now branches into three
-        # paths (qa / summary / chitchat) before we know which one ran.
+        
+        # Execute graph with generic status indicator (intent routing occurs dynamically)
         with st.status("Thinking...", expanded=False) as status:
             try:
                 result = app.invoke(inputs, config=config)
@@ -116,10 +118,7 @@ if prompt := st.chat_input("Ask a question about your documents..."):
         generation = result.get("generation", generation)
         st.markdown(generation)
 
-        # Surface exactly what was retrieved and used, so hallucinations can
-        # be diagnosed: if the right chunks are here but the answer is still
-        # wrong, it's a prompt/model-adherence issue. If the chunks are
-        # missing or irrelevant, it's a retrieval/threshold issue.
+        # Extract execution metadata to populate UI details for diagnostic evaluation
         documents = result.get("documents", [])
         search_query = result.get("search_query")
         intent = result.get("intent")
@@ -128,7 +127,7 @@ if prompt := st.chat_input("Ask a question about your documents..."):
         with st.expander("Details"):
             _render_sources(documents, search_query, intent, target_source)
 
-    # Persist to history, including sources so they can be re-shown on rerun
+    # Persist response and metadata to session state
     st.session_state.messages.append({
         "role": "assistant",
         "content": generation,

@@ -10,14 +10,10 @@ from src.nodes import (
     chitchat_node,
 )
 
-# 1. Initialize the Graph with our State schema
+# Initialize the workflow with the state schema
 workflow = StateGraph(GraphState)
 
-# 2. Add the Nodes
-# NOTE: each node function now has the signature (state, config). LangGraph
-# detects this automatically and passes the RunnableConfig (which carries
-# config["configurable"]["relevance_threshold"] from app.py) as the second
-# argument — no changes needed here beyond the node functions themselves.
+# Add execution nodes
 workflow.add_node("detect_intent", detect_intent_node)
 workflow.add_node("reformulate", reformulate_query_node)
 workflow.add_node("retrieve", retrieve_node)
@@ -26,21 +22,16 @@ workflow.add_node("generate", generate_node)
 workflow.add_node("summarize_document", summarize_document_node)
 workflow.add_node("chitchat", chitchat_node)
 
-# 3. Define the Flow (The Edges)
-# NEW: detect_intent now runs first, before reformulation — reformulation
-# only makes sense for the QA path, so it shouldn't run unconditionally.
+# Set entry point
 workflow.set_entry_point("detect_intent")
 
 
 def route_by_intent(state):
     """
-    NEW: routes each query to one of three paths based on detect_intent_node's
-    classification:
-      - "qa"       -> reformulate -> retrieve -> grade -> generate (unchanged)
-      - "summary"  -> summarize_document (bypasses retrieval entirely — see
-                       summarize_document_node's docstring for why)
-      - "chitchat" -> chitchat (skips retrieval; avoids the QA path's
-                       grounding fallback misfiring on small talk)
+    Routes the query to the appropriate execution path based on the detected intent:
+      - "qa": Standard retrieval-augmented generation.
+      - "summary": Direct document summarization (bypasses retrieval).
+      - "chitchat": Conversational response (bypasses retrieval).
     """
     return state.get("intent", "qa")
 
@@ -55,14 +46,16 @@ workflow.add_conditional_edges(
     },
 )
 
-# Existing QA path, unchanged:
+# QA execution path
 workflow.add_edge("reformulate", "retrieve")
 workflow.add_edge("retrieve", "grade")
 
 
-# 4. Conditional Edge: The Brain
 def decide_to_generate(state):
-    """Determines whether to generate an answer or end the conversation."""
+    """
+    Determines whether to proceed to generation based on retrieved documents.
+    Ends the workflow if no relevant documents passed the grading stage.
+    """
     if not state.get("documents"):
         return "end"
     return "generate"
@@ -77,10 +70,10 @@ workflow.add_conditional_edges(
     }
 )
 
-# 5. Final Edges — all three paths converge and end here.
+# Finalize all execution paths
 workflow.add_edge("generate", END)
 workflow.add_edge("summarize_document", END)
 workflow.add_edge("chitchat", END)
 
-# 6. Compile
+# Compile the graph
 app = workflow.compile()

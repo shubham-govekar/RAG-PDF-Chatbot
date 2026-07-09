@@ -26,24 +26,15 @@ vector_store = Chroma(
 )
 
 # --- Parent/Child Docstore Setup ---
-# These splitter configs MUST match offline_ingestion.py. The child chunks
-# already embedded in Chroma were created with these sizes; ParentDocumentRetriever
-# uses them (plus the docstore) to map a matched child chunk back to its
-# full parent document. It does not re-split anything unless add_documents()
-# is called, which only happens during ingestion, not here.
+# Chunk sizes must align with the ingestion configuration.
 child_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=100)
 parent_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
 
 fs = LocalFileStore("./parent_docs")
 docstore = create_kv_docstore(fs)
 
-# FIX: This is the core retrieval fix. Previously the pipeline searched Chroma
-# directly with `vector_store.as_retriever(...)`, which returns the raw 400-char
-# child chunks used only for embedding precision. That meant the docstore built
-# during ingestion (the 2000-char parent windows) was never actually read.
-# ParentDocumentRetriever searches the same child embeddings in Chroma, but
-# resolves each hit's doc_id back to its parent via the docstore, so
-# generation gets the larger, more coherent context it was designed for.
+# Resolves granular child chunk matches back to their broader parent documents
+# to provide expanded context during generation.
 parent_retriever = ParentDocumentRetriever(
     vectorstore=vector_store,
     docstore=docstore,
@@ -52,22 +43,15 @@ parent_retriever = ParentDocumentRetriever(
     search_kwargs={"k": 10}
 )
 
-# --- BM25 (Keyword) Retriever, rebuilt when the collection changes ---
+# --- BM25 (Keyword) Retriever ---
 _bm25_retriever: Optional[BM25Retriever] = None
 _bm25_doc_count: int = -1
 
 
 def _get_bm25_retriever() -> Optional[BM25Retriever]:
     """
-    Lazily builds the BM25 retriever, and rebuilds it if the number of
-    documents in the Chroma collection has changed since the last build.
-
-    FIX: Previously this was built exactly once at module import time, so if
-    `offline_ingestion.py` was re-run to add new documents while the app was
-    already running, BM25 results would silently go stale until a restart,
-    while the vector leg of the ensemble would already reflect the new data.
-    This also guards the case where the app starts before ingestion has ever
-    been run (empty collection), which would otherwise throw on import.
+    Lazily initializes the BM25 retriever and rebuilds it if the 
+    Chroma collection document count changes.
     """
     global _bm25_retriever, _bm25_doc_count
 
@@ -78,11 +62,6 @@ def _get_bm25_retriever() -> Optional[BM25Retriever]:
         return None
 
     if _bm25_retriever is None or current_count != _bm25_doc_count:
-        # FIX: previously built with texts only, which silently dropped
-        # source metadata on every BM25 hit (they'd render as "unknown
-        # source" in the UI, and couldn't be filtered by document scope).
-        # Chroma's .get() returns "documents" and "metadatas" in matching
-        # order, so this is a safe zip.
         _bm25_retriever = BM25Retriever.from_texts(
             collection["documents"],
             metadatas=collection.get("metadatas"),
@@ -95,9 +74,8 @@ def _get_bm25_retriever() -> Optional[BM25Retriever]:
 
 def _get_ensemble_retriever():
     """
-    Builds the hybrid retriever for the current request. Falls back to
-    parent-doc retrieval alone if BM25 has no data yet (e.g. ingestion
-    hasn't been run), instead of crashing on an empty index.
+    Constructs a hybrid retriever combining vector search (ParentDocumentRetriever) 
+    and keyword search (BM25). Falls back to vector search if BM25 is uninitialized.
     """
     bm25 = _get_bm25_retriever()
     if bm25 is None:
@@ -110,14 +88,7 @@ def _get_ensemble_retriever():
 
 def _list_available_sources() -> list[str]:
     """
-    Enumerates the distinct `source` metadata values across every parent
-    document in the docstore. Used by summarize_document_node to resolve
-    which ingested file a summary request refers to.
-
-    NOTE: iterates the full docstore via fs.yield_keys(). Fine at the scale
-    of a resume-project corpus (a handful of PDFs); if this ever needs to
-    scale to hundreds of documents, maintain a small source->doc_ids index
-    at ingestion time instead of scanning on every summary request.
+    Enumerates distinct source metadata values across all parent documents.
     """
     sources = set()
     for key in fs.yield_keys():
@@ -130,16 +101,13 @@ def _list_available_sources() -> list[str]:
 
 
 def list_available_sources() -> list[str]:
-    """Public wrapper around _list_available_sources — used by app.py to
-    populate a document-scope selector in the sidebar."""
+    """Public wrapper to fetch available document sources for the UI."""
     return _list_available_sources()
 
 
 def _fetch_parent_docs_by_source(source: str) -> list[Document]:
     """
-    Returns every parent document whose `source` metadata exactly matches
-    the given filename, straight from the docstore — bypasses similarity
-    search entirely, which is the point of the summary path.
+    Retrieves all parent documents from the docstore matching the specified source.
     """
     matches = []
     for key in fs.yield_keys():
@@ -150,31 +118,11 @@ def _fetch_parent_docs_by_source(source: str) -> list[Document]:
 
 
 # --- Rerank Compressor & LLMs ---
-# FIX: These were previously instantiated fresh inside their node functions
-# on every single graph run. FlashrankRerank in particular reloads a
-# cross-encoder model from disk each time, which is expensive. Hoisting them
-# to module scope means they're loaded once per process.
-#
-# UPDATE: generation and reformulation moved off local Ollama (qwen2.5:1.5b)
-# onto cloud-hosted open-weight models via src/llm_clients.py — see that
-# module for the Groq/NVIDIA NIM setup and model choice notes. FlashRank and
-# the retrievers above stay local/unchanged; they were never the source of
-# the latency or hallucination problems.
 compressor = FlashrankRerank(model="ms-marco-MiniLM-L-12-v2", top_n=10)
-fast_llm = get_fast_llm(temperature=0)      # reformulate_query, detect_intent, chitchat
-big_llm = get_big_llm(temperature=0.1)      # generate, summarize_document
+fast_llm = get_fast_llm(temperature=0)      
+big_llm = get_big_llm(temperature=0.1)      
 
 # --- Prompt for query reformulation ---
-# FIX (hallucination, same root cause as generate_prompt): the model was
-# ignoring "Do NOT answer the question" and answering anyway, e.g. inventing
-# "MBO stands for Multi-Branch Optimization" instead of just rewriting the
-# query. A single negative instruction buried in a sentence is easy for a
-# 1.5B model to drop. Made blunt, repeated, and anchored with an example of
-# the failure mode to avoid.
-#
-# NOTE: kept intentionally as-is after the model swap. The hosted models are
-# far less prone to this failure mode, but the length-guard fallback in
-# reformulate_query_node below costs nothing to keep as a safety net.
 rewrite_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
@@ -199,16 +147,6 @@ rewrite_prompt = ChatPromptTemplate.from_messages([
 rewriter_chain = rewrite_prompt | fast_llm | StrOutputParser()
 
 # --- Prompt for generation ---
-# FIX (hallucination): small local models like qwen2.5:1.5b frequently ignore
-# a single polite grounding instruction and fall back on their own pretrained
-# knowledge when a topic feels familiar (this is exactly what produced the
-# "RAG = Rich Answer Generation" answer). Small models respond far better to
-# blunt, repeated, explicit instructions than to one clause buried in a
-# sentence. This prompt is intentionally redundant.
-#
-# NOTE: kept as-is after the model swap for the same reason as above — the
-# grounding instruction costs nothing and is good practice regardless of
-# model size.
 generate_prompt = ChatPromptTemplate.from_template(
     """
     You are a strict document-only assistant. You must answer using ONLY the
@@ -235,10 +173,6 @@ generate_prompt = ChatPromptTemplate.from_template(
 generation_chain = generate_prompt | big_llm | StrOutputParser()
 
 # --- Prompt for intent classification ---
-# NEW: routes each query to one of three graph paths. Similarity search
-# can't answer "summarize document X" — there's no single relevant chunk to
-# retrieve — so summary requests need to bypass retrieve/grade entirely and
-# go straight to the full parent document(s) instead.
 intent_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
@@ -256,15 +190,9 @@ intent_chain = intent_prompt | fast_llm | StrOutputParser()
 _VALID_INTENTS = {"qa", "summary", "chitchat"}
 
 # --- Prompts for summary path ---
-# NEW: a document under this many characters is summarized in a single
-# LLM call instead of map-reduce. A typical resume-project PDF (a handful
-# of parent chunks) fits easily. This matters beyond latency: the original
-# one-call-per-chunk map-reduce was the main source of free-tier rate-limit
-# exhaustion, since even a modest PDF fanned out into 8-15+ sequential
-# requests (each retried up to 3x on Groq before falling back to NVIDIA).
-SINGLE_SHOT_CHAR_BUDGET = 24000  # ~6k tokens, comfortably inside gpt-oss-120b's context
-BATCH_SIZE = 5                  # parent chunks per map call, when map-reduce is needed
-MAX_PARENT_DOCS = 40            # hard cap so a large corpus can't trigger a huge fan-out
+SINGLE_SHOT_CHAR_BUDGET = 24000  # Threshold for single-call summarization
+BATCH_SIZE = 5                   # Parent chunks per map call
+MAX_PARENT_DOCS = 40             # Hard limit for batch processing
 
 single_shot_prompt = ChatPromptTemplate.from_messages([
     (
@@ -277,9 +205,7 @@ single_shot_prompt = ChatPromptTemplate.from_messages([
 ])
 single_shot_chain = single_shot_prompt | big_llm | StrOutputParser()
 
-# Map-reduce fallback for documents over the single-shot budget. Batches
-# several parent chunks per map call (rather than one call per chunk) to
-# keep the total request count bounded on larger documents.
+# Map-reduce fallback for documents exceeding the single-shot budget.
 map_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
@@ -301,7 +227,7 @@ reduce_prompt = ChatPromptTemplate.from_messages([
 ])
 reduce_chain = reduce_prompt | big_llm | StrOutputParser()
 
-# --- Prompt for source resolution (summary path, multi-document corpora) ---
+# --- Prompt for source resolution ---
 source_match_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
@@ -331,15 +257,11 @@ chitchat_chain = chitchat_prompt | fast_llm | StrOutputParser()
 
 def detect_intent_node(state: GraphState, config: RunnableConfig) -> dict:
     """
-    Classifies the raw query as "qa", "summary", or "chitchat" so graph.py
-    can route to the appropriate path. Runs first, before reformulation,
-    since reformulation only makes sense for the QA path.
+    Classifies the raw query to route the graph execution path.
     """
     raw_query = state.get("raw_query", "")
     raw_intent = intent_chain.invoke({"query": raw_query}).strip().lower()
 
-    # Fail safe: an unparseable classification defaults to "qa" rather than
-    # silently dropping into a path that might not produce an answer at all.
     intent = raw_intent if raw_intent in _VALID_INTENTS else "qa"
 
     return {"intent": intent}
@@ -353,27 +275,18 @@ def reformulate_query_node(state: GraphState, config: RunnableConfig) -> dict:
     raw_query = state.get("raw_query")
     messages = state.get("messages", [])
 
-    # Short-circuit if there is no chat history (just the current message)
     if len(messages) <= 1:
         return {"search_query": raw_query}
 
-    # Format chat history (excluding the current question at the end)
     chat_history_str = get_buffer_string(messages[:-1])
     current_question = messages[-1].content if hasattr(messages[-1], 'content') else raw_query
 
-    # Invoke the chain
     search_query = rewriter_chain.invoke({
         "chat_history": chat_history_str,
         "current_question": current_question
     })
 
-    # FIX (hallucination safety net): even with the hardened prompt above, a
-    # small model can still occasionally answer instead of rewriting. A
-    # genuine rewritten search query is almost always short (a few words to
-    # one short sentence); an *answer* is typically several sentences long.
-    # If the rewrite blows past a generous length bound, treat it as a
-    # failed rewrite and fall back to the original question rather than
-    # searching with a hallucinated query.
+    # Fallback to the original question if the rewrite output is excessively long
     MAX_REWRITE_WORDS = 25
     if len(search_query.split()) > MAX_REWRITE_WORDS:
         search_query = current_question
@@ -383,24 +296,16 @@ def reformulate_query_node(state: GraphState, config: RunnableConfig) -> dict:
 
 def retrieve_node(state: GraphState, config: RunnableConfig) -> dict:
     """
-    Takes the optimized search query and retrieves relevant document
-    chunks (expanded to their parent context) using the ensemble retriever.
+    Retrieves relevant document chunks using the ensemble retriever.
     """
-    # Extract the search_query from the state
     search_query = state.get("search_query")
 
-    # Safety check
     if not search_query:
         search_query = state.get("raw_query")
 
     ensemble_retriever = _get_ensemble_retriever()
     results = ensemble_retriever.invoke(search_query)
 
-    # NEW: if the user pinned a specific document via the sidebar, drop
-    # anything from other sources. Retrieving un-scoped first and filtering
-    # after is simpler and more robust than threading a filter through both
-    # legs of the ensemble (BM25 + Chroma), and costs nothing extra since
-    # k=10 already over-fetches.
     target_source = state.get("target_source")
     if target_source:
         results = [d for d in results if d.metadata.get("source") == target_source]
@@ -410,26 +315,19 @@ def retrieve_node(state: GraphState, config: RunnableConfig) -> dict:
 
 def grade_documents_node(state: GraphState, config: RunnableConfig) -> dict:
     """
-    Filters retrieved documents using a local FlashRank cross-encoder.
-    Drops any documents below the dynamic relevance threshold.
+    Filters retrieved documents using a cross-encoder based on a relevance threshold.
     """
     documents = state.get("documents", [])
     search_query = state.get("search_query", "")
 
-    # FIX: threshold now comes from LangGraph's native `config["configurable"]`
-    # namespace (passed via app.invoke(inputs, config=...)) instead of being
-    # smuggled through the state dict as a plain field.
     configurable = (config or {}).get("configurable", {})
     threshold = configurable.get("relevance_threshold", 0.2)
 
-    # Short-circuit if no documents were retrieved at all
     if not documents:
         return {"documents": []}
 
-    # Compress/Grade the documents
     compressed_docs = compressor.compress_documents(documents, search_query)
 
-    # Filter docs using a list comprehension
     filtered_docs = [
         doc for doc in compressed_docs
         if doc.metadata.get("relevance_score", 0.0) >= threshold
@@ -442,11 +340,9 @@ def generate_node(state: GraphState, config: RunnableConfig) -> dict:
     """
     Generates an answer based on the retrieved and filtered documents.
     """
-    # Extracting documents and raw query
     documents = state.get("documents", [])
     raw_query = state.get("raw_query")
 
-    # Formatting the context
     context = "\n\n".join(doc.page_content for doc in documents)
 
     response_string = generation_chain.invoke(
@@ -461,10 +357,8 @@ def generate_node(state: GraphState, config: RunnableConfig) -> dict:
 
 def summarize_document_node(state: GraphState, config: RunnableConfig) -> dict:
     """
-    NEW: summary path. Bypasses similarity search entirely — resolves which
-    ingested document the user means, pulls every parent chunk for that
-    source straight from the docstore, and summarizes it with the big-tier
-    cloud LLM (single call when it fits, batched map-reduce otherwise).
+    Bypasses similarity search to summarize a target document directly from the docstore.
+    Uses map-reduce chunking for documents exceeding the single-shot length budget.
     """
     raw_query = state.get("raw_query", "")
     sources = _list_available_sources()
@@ -472,12 +366,8 @@ def summarize_document_node(state: GraphState, config: RunnableConfig) -> dict:
     if not sources:
         return {"generation": "No documents have been ingested yet."}
 
-    # NEW: if the user pinned a document via the sidebar scope selector,
-    # use it directly and skip the LLM-based guess entirely.
     target_source = state.get("target_source")
     if not target_source:
-        # Skip the source-resolution LLM call when there's only one
-        # candidate document — the common case for a single-resume project.
         if len(sources) == 1:
             target_source = sources[0]
         else:
@@ -485,8 +375,7 @@ def summarize_document_node(state: GraphState, config: RunnableConfig) -> dict:
                 "sources": "\n".join(sources),
                 "query": raw_query,
             }).strip()
-            # Fail safe: if the model returns something outside the known
-            # list, fall back to the first source rather than failing.
+            
             if target_source not in sources:
                 target_source = sources[0]
     elif target_source not in sources:
@@ -518,10 +407,7 @@ def summarize_document_node(state: GraphState, config: RunnableConfig) -> dict:
 
 def chitchat_node(state: GraphState, config: RunnableConfig) -> dict:
     """
-    NEW: chitchat path. Skips retrieval entirely for greetings/small talk —
-    routing these into generate_node would hit the "I cannot find the
-    answer in the provided documents" grounding fallback, since there's no
-    retrieved context, which reads as broken rather than just unhelpful.
+    Handles standard conversational queries to bypass vector retrieval.
     """
     response = chitchat_chain.invoke({"query": state.get("raw_query", "")})
     return {"generation": response}

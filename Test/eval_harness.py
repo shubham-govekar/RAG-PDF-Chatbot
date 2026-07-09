@@ -1,39 +1,13 @@
 """
-Retrieval + faithfulness eval harness for the PDF-RAG chatbot.
+Retrieval and faithfulness evaluation harness for the PDF-RAG pipeline.
 
-WHAT THIS DOES
----------------
-1. Runs a small, hand-labeled QA set through the actual graph pipeline
-   (reformulate -> retrieve -> grade), NOT through Streamlit.
-2. For each question, checks whether the *expected source document* made it
-   into the final filtered `documents` list -> gives you Hit Rate@k and MRR.
-   This directly answers "did my retrieval fix actually work" with a number
-   instead of a vibe.
-3. Optionally runs full generation and grades faithfulness (is the answer
-   grounded in the retrieved context, or did the model drift/hallucinate)
-   using an LLM-as-judge call to your own big_llm — cheap, since it's the
-   same model you're already paying for, just one extra short call per Q.
-
-HOW TO ADD QUESTIONS
----------------------
-Edit EVAL_SET below. Each entry needs:
-  - question:        the raw query, exactly as a user would type it
-  - expected_source:  filename (must match `source` metadata from ingestion,
-                       i.e. the PDF filename as stored in Chroma/docstore)
-  - expect_answer:    (optional) a short phrase/fact that should appear in a
-                       correct answer, used only for a soft manual-review flag
-
-Aim for 15-30 questions covering: each ingested PDF at least twice, a mix of
-easy single-fact lookups and harder multi-chunk questions, and a couple of
-questions you KNOW should fail (e.g. asking about a topic not in any doc) to
-sanity-check that grading correctly returns empty results.
-
-RUNNING
--------
-    cd <project_root>          # so `from src...` imports resolve
-    python Test/eval_harness.py
-
-Outputs a printed report and saves Test/eval_report.md.
+Functionality:
+1. Executes a predefined set of QA pairs through the retrieval pipeline 
+   (reformulate -> retrieve -> grade), bypassing the UI.
+2. Calculates retrieval metrics (Hit Rate@k and MRR) by verifying if the 
+   expected source document is present in the final filtered results.
+3. (Optional) Executes full generation and evaluates response faithfulness 
+   (groundedness) using an LLM-as-a-judge approach.
 """
 
 from __future__ import annotations
@@ -43,7 +17,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Make `src` importable when run from the project root or from Test/
+# Ensure `src` is importable when executed from the project root or Test/ directory
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.state import GraphState  # noqa: E402
@@ -59,23 +33,19 @@ from langchain_core.output_parsers import StrOutputParser  # noqa: E402
 
 
 # --------------------------------------------------------------------------
-# 1. EVAL SET — fill this in with real questions against your ingested PDFs
+# 1. EVALUATION SET
 # --------------------------------------------------------------------------
 
 @dataclass
 class EvalCase:
     question: str
     expected_source: str
-    expect_answer: str = ""  # optional hint for manual review, not auto-graded
+    expect_answer: str = ""  # Optional hint for manual review; not auto-graded
 
 
-# Actual source metadata as printed by list_available_sources() on this project:
-# ['data\\Retrieval-Augmented_Generation_RAG.pdf', 'data\\research paper.pdf',
-#  'data\\support paper 2.pdf', 'data\\support paper.pdf']
-# PyMuPDFLoader stores the path exactly as passed to it (str(pdf_path), i.e.
-# "data\research paper.pdf" on Windows), so expected_source must match verbatim
-# including the "data\" prefix and the real on-disk filenames (spaces, no
-# underscores). Using raw strings (r"...") so backslashes aren't escape codes.
+# Note: `expected_source` must exactly match the `source` metadata stored 
+# in the Chroma docstore during ingestion (e.g., using raw strings for 
+# Windows file paths to prevent escape character issues).
 
 EVAL_SET: list[EvalCase] = [
     # --- data\Retrieval-Augmented_Generation_RAG.pdf (Klesel & Wittmann, BISE catchword) ---
@@ -191,13 +161,13 @@ EVAL_SET: list[EvalCase] = [
     # --- Negative control: should retrieve nothing from any ingested PDF ---
     EvalCase(
         question="What is the capital of France?",
-        expected_source="",  # empty = expect NO relevant doc to pass grading
+        expected_source="",
     ),
 ]
 
 
 # --------------------------------------------------------------------------
-# 2. RETRIEVAL METRICS — run reformulate -> retrieve -> grade per question
+# 2. RETRIEVAL METRICS
 # --------------------------------------------------------------------------
 
 @dataclass
@@ -213,8 +183,10 @@ class CaseResult:
 
 
 def run_retrieval_only(case: EvalCase) -> CaseResult:
-    """Runs reformulate -> retrieve -> grade and checks whether the
-    expected source shows up in the post-grading filtered documents."""
+    """
+    Executes the retrieval pipeline (reformulate -> retrieve -> grade) 
+    and validates if the expected source is present in the filtered documents.
+    """
     state: GraphState = {
         "messages": [],
         "raw_query": case.question,
@@ -242,8 +214,8 @@ def run_retrieval_only(case: EvalCase) -> CaseResult:
         latency_s=latency,
     )
 
+    # Evaluate negative control cases where no documents should pass grading.
     if case.expected_source == "":
-        # Negative case: we WANT zero docs to survive grading.
         result.hit = len(docs) == 0
         return result
 
@@ -257,7 +229,7 @@ def run_retrieval_only(case: EvalCase) -> CaseResult:
 
 
 # --------------------------------------------------------------------------
-# 3. FAITHFULNESS CHECK (optional, uses the LLM as a judge)
+# 3. FAITHFULNESS CHECK (LLM-as-a-judge)
 # --------------------------------------------------------------------------
 
 judge_prompt = ChatPromptTemplate.from_template(
@@ -284,8 +256,10 @@ judge_chain = judge_prompt | big_llm | StrOutputParser()
 
 
 def run_full_with_faithfulness(case: EvalCase, retrieval_result: CaseResult) -> CaseResult:
-    """Runs generation on top of the already-graded docs and judges
-    faithfulness. Skips the judge call if grading returned nothing."""
+    """
+    Executes generation using the graded documents and evaluates faithfulness. 
+    Bypasses the evaluation if the grading stage returned no documents.
+    """
     state: GraphState = {
         "messages": [],
         "raw_query": case.question,
@@ -317,7 +291,7 @@ def run_full_with_faithfulness(case: EvalCase, retrieval_result: CaseResult) -> 
 
 
 # --------------------------------------------------------------------------
-# 4. REPORT
+# 4. REPORTING
 # --------------------------------------------------------------------------
 
 def compute_summary(results: list[CaseResult]) -> dict:
