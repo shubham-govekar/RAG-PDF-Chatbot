@@ -1,18 +1,22 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+import os
+
+if not os.path.exists("chroma_db_data") or not os.listdir("chroma_db_data"):
+    from offline_ingestion import run_ingestion
+    run_ingestion()
+
 import streamlit as st
-from src.graph import app  
+from src.graph import app  # Your compiled graph
 from src.nodes import list_available_sources
 
 st.set_page_config(page_title="Local RAG Assistant", layout="wide")
 
 
 def _render_sources(documents, search_query=None, intent=None, target_source=None):
-    """
-    Renders retrieval metadata or execution path details in the UI expander.
-    Handles conditionally bypassed retrieval for summary and chitchat intents.
-    """
+    """Displays retrieval details for the QA path, or a short note for the
+    summary/chitchat paths, which don't run similarity search at all."""
     if intent == "summary":
         st.caption(f"Summarized directly from `{target_source or 'unknown'}` (no similarity search).")
         return
@@ -41,7 +45,7 @@ def _render_sources(documents, search_query=None, intent=None, target_source=Non
         st.divider()
 
 
-# --- Sidebar: Retrieval Configuration ---
+# --- Sidebar: adjustable retrieval settings ---
 with st.sidebar:
     st.header("Retrieval Settings")
     relevance_threshold = st.slider(
@@ -69,11 +73,11 @@ with st.sidebar:
     )
     target_source = None if selected_source == "All documents" else selected_source
 
-# Initialize session state for chat history
+# Initialize chat history in session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Render existing chat history
+# Display history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -86,14 +90,14 @@ for message in st.session_state.messages:
                     message.get("target_source"),
                 )
 
-# Handle new user input
+# User input
 if prompt := st.chat_input("Ask a question about your documents..."):
-    
+    # Display user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Construct state payload and configuration for graph execution
+    # Prepare inputs for the graph
     inputs = {
         "messages": st.session_state.messages,
         "raw_query": prompt,
@@ -105,8 +109,8 @@ if prompt := st.chat_input("Ask a question about your documents..."):
     generation = "I'm sorry, I couldn't find an answer."
 
     with st.chat_message("assistant"):
-        
-        # Execute graph with generic status indicator (intent routing occurs dynamically)
+        # NOTE: label kept generic since the graph now branches into three
+        # paths (qa / summary / chitchat) before we know which one ran.
         with st.status("Thinking...", expanded=False) as status:
             try:
                 result = app.invoke(inputs, config=config)
@@ -118,7 +122,10 @@ if prompt := st.chat_input("Ask a question about your documents..."):
         generation = result.get("generation", generation)
         st.markdown(generation)
 
-        # Extract execution metadata to populate UI details for diagnostic evaluation
+        # Surface exactly what was retrieved and used, so hallucinations can
+        # be diagnosed: if the right chunks are here but the answer is still
+        # wrong, it's a prompt/model-adherence issue. If the chunks are
+        # missing or irrelevant, it's a retrieval/threshold issue.
         documents = result.get("documents", [])
         search_query = result.get("search_query")
         intent = result.get("intent")
@@ -127,7 +134,7 @@ if prompt := st.chat_input("Ask a question about your documents..."):
         with st.expander("Details"):
             _render_sources(documents, search_query, intent, target_source)
 
-    # Persist response and metadata to session state
+    # Persist to history, including sources so they can be re-shown on rerun
     st.session_state.messages.append({
         "role": "assistant",
         "content": generation,
