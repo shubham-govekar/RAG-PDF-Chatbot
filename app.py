@@ -7,9 +7,14 @@ if not os.path.exists("chroma_db_data") or not os.listdir("chroma_db_data"):
     from offline_ingestion import run_ingestion
     run_ingestion()
 
+import logging
+
 import streamlit as st
 from src.graph import app  # Your compiled graph
 from src.nodes import list_available_sources
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="Local RAG Assistant", layout="wide")
 
@@ -115,9 +120,13 @@ if prompt := st.chat_input("Ask a question about your documents..."):
             try:
                 result = app.invoke(inputs, config=config)
                 status.update(label="Done", state="complete")
-            except Exception as e:
+            except Exception:
+                logger.exception("Error while generating a response")
                 status.update(label="Failed", state="error")
-                st.error(f"Something went wrong while generating a response: {e}")
+                st.error(
+                    "An internal error occurred. Please try again or check "
+                    "server logs."
+                )
 
         generation = result.get("generation", generation)
         st.markdown(generation)

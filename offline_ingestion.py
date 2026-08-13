@@ -7,6 +7,17 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_classic.retrievers import ParentDocumentRetriever
 from langchain_community.document_loaders import PyMuPDFLoader
 
+
+def _is_valid_pdf(path: Path) -> bool:
+    """Validates a file by checking its magic bytes for the PDF header (%PDF)."""
+    try:
+        with open(path, "rb") as f:
+            header = f.read(5)
+        return header.startswith(b"%PDF")
+    except OSError:
+        return False
+
+
 def run_ingestion():
     print("Starting Offline Ingestion Pipeline")
     data_folder = Path("data")
@@ -43,6 +54,9 @@ def run_ingestion():
     print(f"Scanning {data_folder} for PDFs...")
     
     for pdf_path in data_folder.glob("*.pdf"):
+        if not _is_valid_pdf(pdf_path):
+            print(f"Skipping {pdf_path.name}: not a valid PDF (missing %PDF header).")
+            continue
         print(f"Loading: {pdf_path.name}")
         loader = PyMuPDFLoader(str(pdf_path))
         docs.extend(loader.load())

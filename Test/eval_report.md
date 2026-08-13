@@ -3,9 +3,9 @@
 - Cases run: 21
 - Retrieval Hit Rate: 100.0%
 - Mean Reciprocal Rank (MRR): 0.952
-- Faithfulness Rate (grounded / judged): 100.0%
-- Ungrounded answers: 0
-- Avg retrieval latency: 2.50s
+- Faithfulness Rate (grounded / judged): 95.0%
+- Ungrounded answers: 1
+- Avg retrieval latency: 2.77s
 
 ## Per-case detail
 
@@ -15,7 +15,7 @@
 | What are the advantages and disadvantages of RAG? | data\Retrieval-Augmented_Generation_RAG.pdf | ✅ | 1 | GROUNDED |
 | What is grounding in the context of RAG? | data\Retrieval-Augmented_Generation_RAG.pdf | ✅ | 1 | GROUNDED |
 | What is the blinkered chunk effect? | data\Retrieval-Augmented_Generation_RAG.pdf | ✅ | 1 | GROUNDED |
-| What is the difference between parametric and non-parametric memory in RAG? | data\Retrieval-Augmented_Generation_RAG.pdf | ✅ | 1 | GROUNDED |
+| What is the difference between parametric and non-parametric memory in RAG? | data\Retrieval-Augmented_Generation_RAG.pdf | ✅ | 1 | UNGROUNDED |
 | What is MBO-DeBERTa? | data\research paper.pdf | ✅ | 1 | GROUNDED |
 | What accuracy did the proposed model achieve on the Fake Review dataset? | data\research paper.pdf | ✅ | 1 | GROUNDED |
 | What method was used to detect adversarial attacks on the fake review model? | data\research paper.pdf | ✅ | 1 | GROUNDED |

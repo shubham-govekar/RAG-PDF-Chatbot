@@ -33,12 +33,18 @@ def _resilient(groq_model: str, nvidia_model: str, temperature: float = 0.0):
     Creates a resilient LLM client with Groq as primary and NVIDIA as fallback.
     Disables internal retries to ensure immediate fail-over during rate limits.
     """
-    if not os.environ.get("GROQ_API_KEY"):
+    groq_api_key = os.environ.get("GROQ_API_KEY")
+    if not groq_api_key:
         raise RuntimeError(
             "GROQ_API_KEY not set."
         )
 
-    groq_llm = ChatGroq(model=groq_model, temperature=temperature, max_retries=0)
+    groq_llm = ChatGroq(
+        model=groq_model,
+        api_key=SecretStr(groq_api_key),
+        temperature=temperature,
+        max_retries=0,
+    )
     nvidia_llm = _nvidia_llm(nvidia_model, temperature=temperature)
 
     return groq_llm.with_fallbacks([nvidia_llm])
